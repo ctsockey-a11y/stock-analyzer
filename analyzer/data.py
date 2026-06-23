@@ -119,6 +119,10 @@ def _finnhub_info(ticker: str, key: str) -> dict[str, Any]:
         "sector": profile.get("finnhubIndustry") or "—",
         "currentPrice": price,
         "regularMarketPrice": price,
+        # Today's move: Finnhub quote gives d (change/share) and dp (% change).
+        "regularMarketChange": _num(quote.get("d")),
+        "regularMarketChangePercent": _num(quote.get("dp")),
+        "previousClose": _num(quote.get("pc")),
         "trailingPE": pe,
         "pegRatio": peg,
         "priceToSalesTrailing12Months": _num(metric.get("psTTM")),

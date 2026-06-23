@@ -39,6 +39,8 @@ class Analysis:
     upside_pct: float | None  # to analyst mean target (local/yfinance only)
     analyst_rating: str | None  # Strong Buy / Buy / Hold / Sell / Strong Sell
     analyst_bullish_pct: float | None  # % of analysts rating Buy or Strong Buy
+    day_change: float | None  # today's price change per share ($)
+    day_change_pct: float | None  # today's price change (%)
     info: dict[str, Any]
 
     @property
@@ -326,6 +328,15 @@ def analyze(ticker: str) -> Analysis:
     target = info.get("targetMeanPrice")
     upside = ((target / price - 1) * 100) if (target and price) else None
 
+    # Today's move. Prefer computing % from change ÷ previous close for a
+    # consistent result across Finnhub (dp) and yfinance.
+    day_change = info.get("regularMarketChange")
+    prev_close = info.get("previousClose")
+    if day_change is not None and prev_close:
+        day_change_pct = day_change / prev_close * 100
+    else:
+        day_change_pct = info.get("regularMarketChangePercent")
+
     return Analysis(
         ticker=ticker,
         name=info.get("longName") or info.get("shortName") or ticker,
@@ -337,6 +348,8 @@ def analyze(ticker: str) -> Analysis:
         upside_pct=round(upside, 1) if upside is not None else None,
         analyst_rating=consensus.get("rating") if consensus else None,
         analyst_bullish_pct=consensus.get("bullish_pct") if consensus else None,
+        day_change=round(day_change, 2) if day_change is not None else None,
+        day_change_pct=round(day_change_pct, 2) if day_change_pct is not None else None,
         info=info,
     )
 

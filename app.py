@@ -136,27 +136,45 @@ with tab_portfolio:
         if pos.empty:
             st.warning("Couldn't fetch data for those tickers. Check the symbols.")
         else:
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("Total value", f"${summary['total_value']:,.0f}")
-            c2.metric("Positions", summary["positions"])
-            c3.metric("Weighted health", f"{summary['weighted_health']:.0f}/100")
-            c4.metric("Top holding weight", f"{summary['concentration']:.0f}%")
+            day_pl = summary.get("day_pl")
+            day_pl_pct = summary.get("day_pl_pct")
+            if day_pl is not None:
+                c2.metric(
+                    "Today's P&L",
+                    f"${day_pl:+,.0f}",
+                    delta=f"{day_pl_pct:+.2f}%" if day_pl_pct is not None else None,
+                )
+            else:
+                c2.metric("Today's P&L", "—")
+            c3.metric("Positions", summary["positions"])
+            c4.metric("Weighted health", f"{summary['weighted_health']:.0f}/100")
+            c5.metric("Top holding weight", f"{summary['concentration']:.0f}%")
 
             for w in portfolio.portfolio_warnings(summary):
                 st.warning(w)
 
             st.subheader("Positions")
+
+            def _day_color(v):
+                if pd.isna(v):
+                    return ""
+                return "color: #16c784" if v > 0 else ("color: #ea3943" if v < 0 else "")
+
             st.dataframe(
                 pos.style.format(
                     {
                         "Price": "${:,.2f}",
+                        "Day $": "${:+,.0f}",
+                        "Day %": "{:+.2f}%",
                         "Value": "${:,.0f}",
                         "Gain %": "{:+.1f}%",
                         "Weight %": "{:.1f}%",
                         "Health": "{:.0f}",
                     },
                     na_rep="—",
-                ),
+                ).map(_day_color, subset=["Day $", "Day %"]),
                 use_container_width=True,
                 hide_index=True,
             )
@@ -188,7 +206,10 @@ with tab_stock:
         else:
             top = st.columns([3, 1, 1])
             top[0].markdown(f"### {a.name}  \n*{a.sector}*")
-            top[1].metric("Price", f"${a.price:,.2f}" if a.price else "—")
+            _day_delta = None
+            if a.day_change is not None and a.day_change_pct is not None:
+                _day_delta = f"{a.day_change:+,.2f} ({a.day_change_pct:+.2f}%) today"
+            top[1].metric("Price", f"${a.price:,.2f}" if a.price else "—", delta=_day_delta)
             _arating = a.analyst_rating or "—"
             _ahelp = f"{a.analyst_bullish_pct:.0f}% of analysts bullish" if a.analyst_bullish_pct is not None else None
             top[2].metric("Analyst rating", _arating, help=_ahelp)

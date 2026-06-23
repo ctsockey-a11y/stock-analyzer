@@ -95,12 +95,15 @@ def analyze_portfolio(holdings: pd.DataFrame) -> tuple[pd.DataFrame, dict, list[
         value = price * shares
         cost = float(h["cost_basis"]) if pd.notna(h["cost_basis"]) else None
         gain_pct = ((price / cost - 1) * 100) if (cost and cost > 0) else None
+        day_pl = a.day_change * shares if a.day_change is not None else None
         rows.append(
             {
                 "Ticker": a.ticker,
                 "Name": a.name[:28],
                 "Shares": shares,
                 "Price": price,
+                "Day $": round(day_pl, 2) if day_pl is not None else None,
+                "Day %": a.day_change_pct,
                 "Value": value,
                 "Gain %": round(gain_pct, 1) if gain_pct is not None else None,
                 "Health": a.composite,
@@ -116,10 +119,15 @@ def analyze_portfolio(holdings: pd.DataFrame) -> tuple[pd.DataFrame, dict, list[
         total = df["Value"].sum()
         df["Weight %"] = (df["Value"] / total * 100).round(1) if total else 0.0
         weighted_health = (df["Health"] * df["Value"]).sum() / total if total else df["Health"].mean()
+        day_pl = df["Day $"].sum(skipna=True)
+        prev_value = total - day_pl  # portfolio value at yesterday's close
+        day_pl_pct = (day_pl / prev_value * 100) if prev_value else None
         summary = {
             "total_value": total,
             "positions": len(df),
             "weighted_health": round(weighted_health, 1),
+            "day_pl": round(day_pl, 2),
+            "day_pl_pct": round(day_pl_pct, 2) if day_pl_pct is not None else None,
             "best": df.loc[df["Health"].idxmax(), "Ticker"] if total else None,
             "worst": df.loc[df["Health"].idxmin(), "Ticker"] if total else None,
             "sector_weights": df.groupby("Sector")["Value"].sum().sort_values(ascending=False).to_dict(),
