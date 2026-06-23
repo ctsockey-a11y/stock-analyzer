@@ -58,7 +58,7 @@ def analyze_portfolio(holdings: pd.DataFrame) -> tuple[pd.DataFrame, dict, list[
                 "Gain %": round(gain_pct, 1) if gain_pct is not None else None,
                 "Health": a.composite,
                 "Verdict": a.verdict,
-                "Upside %": a.upside_pct,
+                "Analyst": a.analyst_rating or "—",
                 "Sector": a.sector,
             }
         )

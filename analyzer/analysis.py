@@ -36,7 +36,9 @@ class Analysis:
     composite: float
     verdict: str
     pillars: list[Pillar]
-    upside_pct: float | None  # to analyst mean target
+    upside_pct: float | None  # to analyst mean target (local/yfinance only)
+    analyst_rating: str | None  # Strong Buy / Buy / Hold / Sell / Strong Sell
+    analyst_bullish_pct: float | None  # % of analysts rating Buy or Strong Buy
     info: dict[str, Any]
 
     @property
@@ -194,9 +196,21 @@ def _health(info: dict) -> Pillar:
     return p
 
 
-def _smart_money(ticker: str, info: dict, hist: pd.DataFrame) -> Pillar:
-    """Combines what big/insider money is doing with price momentum."""
+def _smart_money(ticker: str, info: dict, hist: pd.DataFrame, consensus: dict | None = None) -> Pillar:
+    """Combines what big/insider money is doing with analyst views and momentum."""
     p = Pillar("Smart money & momentum", 50, 0.22)
+
+    # Analyst recommendation consensus (Finnhub free endpoint).
+    if consensus and consensus.get("rating"):
+        rating = consensus["rating"]
+        pct = consensus.get("bullish_pct")
+        suffix = f" ({pct:.0f}% bullish)" if pct is not None else ""
+        if rating in ("Strong Buy", "Buy"):
+            p.reasons.append(f"Analysts rate it {rating}{suffix}")
+            p.score += 10 if rating == "Strong Buy" else 7
+        elif rating in ("Sell", "Strong Sell"):
+            p.flags.append(f"Analysts rate it {rating}{suffix}")
+            p.score -= 10 if rating == "Strong Sell" else 7
 
     # Insider net buying (Form 4) — net buys are a strong conviction signal.
     insiders = data.get_insider_transactions(ticker)
@@ -267,13 +281,14 @@ def analyze(ticker: str) -> Analysis:
     ticker = ticker.strip().upper()
     info = data.get_info(ticker)
     hist = data.get_price_history(ticker, "1y")
+    consensus = data.get_analyst_consensus(ticker)
 
     pillars = [
         _valuation(info),
         _growth(info),
         _profitability(info),
         _health(info),
-        _smart_money(ticker, info, hist),
+        _smart_money(ticker, info, hist, consensus),
     ]
     total_w = sum(p.weight for p in pillars)
     composite = sum(p.score * p.weight for p in pillars) / total_w if total_w else 50.0
@@ -291,6 +306,8 @@ def analyze(ticker: str) -> Analysis:
         verdict=_verdict(composite),
         pillars=pillars,
         upside_pct=round(upside, 1) if upside is not None else None,
+        analyst_rating=consensus.get("rating") if consensus else None,
+        analyst_bullish_pct=consensus.get("bullish_pct") if consensus else None,
         info=info,
     )
 
@@ -325,7 +342,9 @@ def opportunity_score(a: Analysis) -> float:
         + 0.15 * by_name.get("Profitability", 50)
     )
     if a.upside_pct is not None:
-        base += min(20, max(-10, a.upside_pct / 3))  # analyst upside bonus, capped
+        base += min(20, max(-10, a.upside_pct / 3))  # analyst dollar-upside bonus, capped
+    elif a.analyst_bullish_pct is not None:
+        base += (a.analyst_bullish_pct - 50) / 5  # consensus bonus: -10..+10 around neutral
     return round(_clamp(base), 1)
 
 
@@ -345,7 +364,7 @@ def screen(tickers: list[str]) -> pd.DataFrame:
                 "Opportunity": opportunity_score(a),
                 "Composite": a.composite,
                 "Verdict": a.verdict,
-                "Upside %": a.upside_pct,
+                "Analyst": a.analyst_rating or "—",
                 "Sector": a.sector,
                 "Top reason": (a.all_reasons[0] if a.all_reasons else "—"),
                 "Top risk": (a.all_flags[0] if a.all_flags else "—"),

@@ -101,7 +101,6 @@ def _finnhub_info(ticker: str, key: str) -> dict[str, Any]:
     profile = _get("stock/profile2", symbol=ticker)
     quote = _get("quote", symbol=ticker)
     metric = (_get("stock/metric", symbol=ticker, metric="all") or {}).get("metric", {}) or {}
-    target = _get("stock/price-target", symbol=ticker)  # may be empty on free tier
 
     price = _num(quote.get("c"))
     pe = _num(metric.get("peTTM")) or _num(metric.get("peBasicExclExtraTTM")) or _num(metric.get("peNormalizedAnnual"))
@@ -131,7 +130,10 @@ def _finnhub_info(ticker: str, key: str) -> dict[str, Any]:
         "debtToEquity": de,
         "currentRatio": _num(metric.get("currentRatioAnnual")) or _num(metric.get("currentRatioQuarterly")),
         "freeCashflow": _num(metric.get("freeCashFlowTTM")),
-        "targetMeanPrice": _num(target.get("targetMean")),
+        # Dollar price targets are premium-gated on Finnhub's free tier; left None
+        # on cloud (yfinance fills it locally). Analyst view comes from
+        # get_analyst_consensus() instead, which uses a free Finnhub endpoint.
+        "targetMeanPrice": None,
         # 6-month price return (%) — lets the momentum signal work without a price series.
         "_mom6m": _num(metric.get("26WeekPriceReturnDaily")),
         "_source": "finnhub",
@@ -225,6 +227,90 @@ def get_recommendations(ticker: str) -> pd.DataFrame:
         return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
+
+
+def _rating_label(score: float) -> str:
+    """Map a 1-5 consensus score (5 = most bullish) to a label."""
+    if score >= 4.5:
+        return "Strong Buy"
+    if score >= 3.5:
+        return "Buy"
+    if score >= 2.5:
+        return "Hold"
+    if score >= 1.5:
+        return "Sell"
+    return "Strong Sell"
+
+
+def get_analyst_consensus(ticker: str) -> dict[str, Any] | None:
+    """Analyst Buy/Hold/Sell consensus.
+
+    Uses Finnhub's free recommendation-trends endpoint (works on cloud) when a
+    key is present; falls back to yfinance's recommendation fields locally.
+    Returns {rating, score, bullish_pct, total, counts, period} or None.
+    """
+    key = finnhub_key()
+    if key:
+        c = _finnhub_consensus(ticker, key)
+        if c:
+            return c
+    return _yf_consensus(ticker)
+
+
+def _finnhub_consensus(ticker: str, key: str) -> dict[str, Any] | None:
+    try:
+        r = requests.get(
+            f"{_FINNHUB}/stock/recommendation",
+            params={"symbol": ticker.upper(), "token": key},
+            timeout=_HTTP_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows = r.json() or []
+        if not rows:
+            return None
+        d = rows[0]  # most recent month
+        sb, b, h, s, ss = (
+            int(d.get("strongBuy", 0)),
+            int(d.get("buy", 0)),
+            int(d.get("hold", 0)),
+            int(d.get("sell", 0)),
+            int(d.get("strongSell", 0)),
+        )
+        total = sb + b + h + s + ss
+        if total == 0:
+            return None
+        score = (sb * 5 + b * 4 + h * 3 + s * 2 + ss * 1) / total
+        return {
+            "rating": _rating_label(score),
+            "score": round(score, 2),
+            "bullish_pct": round((sb + b) / total * 100),
+            "total": total,
+            "counts": {"Strong Buy": sb, "Buy": b, "Hold": h, "Sell": s, "Strong Sell": ss},
+            "period": d.get("period"),
+        }
+    except Exception:
+        return None
+
+
+def _yf_consensus(ticker: str) -> dict[str, Any] | None:
+    """Local fallback from yfinance .info recommendation fields."""
+    try:
+        info = yf.Ticker(ticker).info or {}
+        mean = info.get("recommendationMean")  # Yahoo: 1 = Strong Buy ... 5 = Sell (inverted vs ours)
+        n = info.get("numberOfAnalystOpinions")
+        key_ = info.get("recommendationKey")
+        if mean is None and not key_:
+            return None
+        if mean is not None:
+            score = 6 - float(mean)  # flip to our scale where higher = more bullish
+            rating = _rating_label(score)
+        else:
+            rating = str(key_).replace("_", " ").title()
+            score = None
+        return {"rating": rating, "score": round(score, 2) if score is not None else None,
+                "bullish_pct": None, "total": n, "counts": None, "period": None}
+    except Exception:
+        return None
 
 
 # --------------------------------------------------------------------------- #

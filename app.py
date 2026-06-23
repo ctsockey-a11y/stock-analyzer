@@ -146,7 +146,6 @@ with tab_portfolio:
                         "Price": "${:,.2f}",
                         "Value": "${:,.0f}",
                         "Gain %": "{:+.1f}%",
-                        "Upside %": "{:+.1f}%",
                         "Weight %": "{:.1f}%",
                         "Health": "{:.0f}",
                     },
@@ -184,7 +183,9 @@ with tab_stock:
             top = st.columns([3, 1, 1])
             top[0].markdown(f"### {a.name}  \n*{a.sector}*")
             top[1].metric("Price", f"${a.price:,.2f}" if a.price else "—")
-            top[2].metric("Analyst upside", f"{a.upside_pct:+.0f}%" if a.upside_pct is not None else "—")
+            _arating = a.analyst_rating or "—"
+            _ahelp = f"{a.analyst_bullish_pct:.0f}% of analysts bullish" if a.analyst_bullish_pct is not None else None
+            top[2].metric("Analyst rating", _arating, help=_ahelp)
             st.markdown(verdict_badge(a), unsafe_allow_html=True)
 
             # Pillar scores
@@ -277,7 +278,7 @@ with tab_screen:
         else:
             st.success(f"Ranked {len(res)} stocks by opportunity.")
             st.dataframe(
-                res.style.format({"Price": "${:,.2f}", "Opportunity": "{:.0f}", "Composite": "{:.0f}", "Upside %": "{:+.1f}%"}, na_rep="—")
+                res.style.format({"Price": "${:,.2f}", "Opportunity": "{:.0f}", "Composite": "{:.0f}"}, na_rep="—")
                 .background_gradient(subset=["Opportunity"], cmap="RdYlGn", vmin=0, vmax=100),
                 use_container_width=True,
                 hide_index=True,
