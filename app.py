@@ -136,21 +136,33 @@ with tab_portfolio:
         if pos.empty:
             st.warning("Couldn't fetch data for those tickers. Check the symbols.")
         else:
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("Total value", f"${summary['total_value']:,.0f}")
+            r1c1, r1c2, r1c3 = st.columns(3)
+            r1c1.metric("Total value", f"${summary['total_value']:,.0f}")
+            total_pl = summary.get("total_pl")
+            total_pl_pct = summary.get("total_pl_pct")
+            if total_pl is not None:
+                r1c2.metric(
+                    "Total P&L (vs cost)",
+                    f"${total_pl:+,.0f}",
+                    delta=f"{total_pl_pct:+.1f}%" if total_pl_pct is not None else None,
+                )
+            else:
+                r1c2.metric("Total P&L (vs cost)", "—", help="Add a cost basis column to see this")
             day_pl = summary.get("day_pl")
             day_pl_pct = summary.get("day_pl_pct")
             if day_pl is not None:
-                c2.metric(
+                r1c3.metric(
                     "Today's P&L",
                     f"${day_pl:+,.0f}",
                     delta=f"{day_pl_pct:+.2f}%" if day_pl_pct is not None else None,
                 )
             else:
-                c2.metric("Today's P&L", "—")
-            c3.metric("Positions", summary["positions"])
-            c4.metric("Weighted health", f"{summary['weighted_health']:.0f}/100")
-            c5.metric("Top holding weight", f"{summary['concentration']:.0f}%")
+                r1c3.metric("Today's P&L", "—")
+
+            r2c1, r2c2, r2c3 = st.columns(3)
+            r2c1.metric("Positions", summary["positions"])
+            r2c2.metric("Weighted health", f"{summary['weighted_health']:.0f}/100")
+            r2c3.metric("Top holding weight", f"{summary['concentration']:.0f}%")
 
             for w in portfolio.portfolio_warnings(summary):
                 st.warning(w)
@@ -185,6 +197,24 @@ with tab_portfolio:
                 fig.update_layout(height=340, margin=dict(t=40, b=0, l=0, r=0))
                 st.plotly_chart(fig, use_container_width=True)
             with cc2:
+                # Allocation by sector — leans on the refined crypto/AI/quantum labels.
+                sec = pos.groupby("Sector", as_index=False)["Value"].sum()
+                figs = px.pie(sec, values="Value", names="Sector", title="Allocation by sector", hole=0.45)
+                figs.update_layout(height=340, margin=dict(t=40, b=0, l=0, r=0))
+                st.plotly_chart(figs, use_container_width=True)
+
+            cc3, cc4 = st.columns(2)
+            with cc3:
+                dp = pos.dropna(subset=["Day $"]).copy()
+                if not dp.empty:
+                    dp["dir"] = dp["Day $"].apply(lambda v: "up" if v >= 0 else "down")
+                    figd = px.bar(
+                        dp, x="Ticker", y="Day $", title="Today's P&L by holding ($)",
+                        color="dir", color_discrete_map={"up": "#16c784", "down": "#ea3943"},
+                    )
+                    figd.update_layout(height=340, margin=dict(t=40, b=0, l=0, r=0), showlegend=False)
+                    st.plotly_chart(figd, use_container_width=True)
+            with cc4:
                 health = pos[["Ticker", "Health"]].copy()
                 fig2 = px.bar(
                     health, x="Ticker", y="Health", title="Health score by holding",
@@ -214,6 +244,17 @@ with tab_stock:
             _ahelp = f"{a.analyst_bullish_pct:.0f}% of analysts bullish" if a.analyst_bullish_pct is not None else None
             top[2].metric("Analyst rating", _arating, help=_ahelp)
             st.markdown(verdict_badge(a), unsafe_allow_html=True)
+
+            # 52-week range: where does today's price sit between the year's low and high?
+            lo = a.info.get("fiftyTwoWeekLow")
+            hi = a.info.get("fiftyTwoWeekHigh")
+            if lo and hi and hi > lo and a.price:
+                pos_pct = max(0.0, min(1.0, (a.price - lo) / (hi - lo)))
+                st.caption(
+                    f"**52-week range** — ${lo:,.2f} low · **${a.price:,.2f} now** "
+                    f"({pos_pct*100:.0f}% of range) · ${hi:,.2f} high"
+                )
+                st.progress(pos_pct)
 
             # Pillar scores
             st.subheader("Why this score")

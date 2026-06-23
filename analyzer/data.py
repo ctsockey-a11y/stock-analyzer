@@ -134,6 +134,8 @@ def _finnhub_info(ticker: str, key: str) -> dict[str, Any]:
         "debtToEquity": de,
         "currentRatio": _num(metric.get("currentRatioAnnual")) or _num(metric.get("currentRatioQuarterly")),
         "freeCashflow": _num(metric.get("freeCashFlowTTM")),
+        "fiftyTwoWeekHigh": _num(metric.get("52WeekHigh")),
+        "fiftyTwoWeekLow": _num(metric.get("52WeekLow")),
         # Dollar price targets are premium-gated on Finnhub's free tier; left None
         # on cloud (yfinance fills it locally). Analyst view comes from
         # get_analyst_consensus() instead, which uses a free Finnhub endpoint.

@@ -105,6 +105,7 @@ def analyze_portfolio(holdings: pd.DataFrame) -> tuple[pd.DataFrame, dict, list[
                 "Day $": round(day_pl, 2) if day_pl is not None else None,
                 "Day %": a.day_change_pct,
                 "Value": value,
+                "Cost value": round(cost * shares, 2) if cost else None,
                 "Gain %": round(gain_pct, 1) if gain_pct is not None else None,
                 "Health": a.composite,
                 "Verdict": a.verdict,
@@ -122,18 +123,28 @@ def analyze_portfolio(holdings: pd.DataFrame) -> tuple[pd.DataFrame, dict, list[
         day_pl = df["Day $"].sum(skipna=True)
         prev_value = total - day_pl  # portfolio value at yesterday's close
         day_pl_pct = (day_pl / prev_value * 100) if prev_value else None
+
+        # Total (unrealized) P&L vs cost basis, over positions with a known cost.
+        cost_value = pd.to_numeric(df["Cost value"], errors="coerce")
+        invested = cost_value.sum(skipna=True)
+        value_of_costed = df.loc[cost_value.notna(), "Value"].sum()
+        total_pl = (value_of_costed - invested) if invested else None
+        total_pl_pct = (total_pl / invested * 100) if (total_pl is not None and invested) else None
         summary = {
             "total_value": total,
             "positions": len(df),
             "weighted_health": round(weighted_health, 1),
             "day_pl": round(day_pl, 2),
             "day_pl_pct": round(day_pl_pct, 2) if day_pl_pct is not None else None,
+            "total_pl": round(total_pl, 2) if total_pl is not None else None,
+            "total_pl_pct": round(total_pl_pct, 2) if total_pl_pct is not None else None,
             "best": df.loc[df["Health"].idxmax(), "Ticker"] if total else None,
             "worst": df.loc[df["Health"].idxmin(), "Ticker"] if total else None,
             "sector_weights": df.groupby("Sector")["Value"].sum().sort_values(ascending=False).to_dict(),
             "concentration": round(df["Weight %"].max(), 1) if total else 0.0,
         }
         df = df.sort_values("Value", ascending=False).reset_index(drop=True)
+    df = df.drop(columns=["Cost value"], errors="ignore")  # internal-only column
     return df, summary, analyses
 
 
