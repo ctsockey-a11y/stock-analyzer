@@ -225,6 +225,8 @@ with tab_stock:
                 fig.add_trace(go.Scatter(x=ma.index, y=ma, name="200-day avg", line=dict(color="#888", dash="dot")))
                 fig.update_layout(height=320, title="1-year price", margin=dict(t=40, b=0, l=0, r=0))
                 st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.caption("📉 Price chart unavailable here (Yahoo blocks cloud servers). Momentum is scored from Finnhub data instead.")
 
             # Smart money + news in expandable sections
             with st.expander("🏦 Who's buying — institutions & insiders", expanded=True):

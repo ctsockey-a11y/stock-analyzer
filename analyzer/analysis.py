@@ -229,7 +229,9 @@ def _smart_money(ticker: str, info: dict, hist: pd.DataFrame) -> Pillar:
                 p.reasons.append("Company is buying back its own stock")
                 p.score += 8
 
-    # Price momentum vs 200-day moving average + 6-month return.
+    # Price momentum. Prefer a real series (200-day MA + 6-month return) when we
+    # have one; otherwise fall back to Finnhub's precomputed 6-month return so the
+    # signal still works on cloud where Yahoo price history is unavailable.
     if isinstance(hist, pd.DataFrame) and len(hist) > 60:
         close = hist["Close"].dropna()
         last = close.iloc[-1]
@@ -242,6 +244,10 @@ def _smart_money(ticker: str, info: dict, hist: pd.DataFrame) -> Pillar:
             p.score -= 8
         lookback = close.iloc[-min(126, len(close))]
         ret6 = (last / lookback - 1) * 100
+    else:
+        ret6 = info.get("_mom6m")
+
+    if ret6 is not None:
         if ret6 > 25:
             p.reasons.append(f"Up {ret6:.0f}% over ~6 months (strong momentum)")
             p.score += 8

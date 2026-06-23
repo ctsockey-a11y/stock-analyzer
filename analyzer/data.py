@@ -1,9 +1,15 @@
 """Data fetching layer.
 
-All external data comes from free, key-less sources by default:
-  * yfinance  -> prices, fundamentals, institutional holders, insider trades, news
-  * SEC EDGAR -> latest regulatory filings (no key, just a User-Agent)
-An optional free Finnhub key enriches news with sentiment.
+Data source strategy is built for free cloud hosting:
+  * Finnhub  -> prices, fundamentals, insider trades, news (works from any IP
+                with a free key; this is the PRIMARY source on Streamlit Cloud).
+  * yfinance -> same fields, used as a fallback. Great locally, but Yahoo blocks
+                cloud datacenter IPs, so it usually returns nothing when deployed.
+  * Stooq    -> price history fallback (free, no key, not IP-blocked).
+  * SEC EDGAR-> latest regulatory filings (no key, just a User-Agent; not blocked).
+
+The Finnhub key is read from st.secrets["FINNHUB_KEY"] or the FINNHUB_KEY env
+var. Without it the app still runs on yfinance (fine locally, sparse on cloud).
 
 Every fetch is defensive: market data is messy and endpoints change, so each
 function returns a safe empty value rather than raising, and the UI degrades
@@ -12,6 +18,7 @@ gracefully when a piece is missing.
 from __future__ import annotations
 
 import datetime as _dt
+import os
 from typing import Any
 
 import pandas as pd
@@ -21,26 +28,123 @@ import yfinance as yf
 # SEC requires a descriptive User-Agent with contact info per their fair-access policy.
 SEC_HEADERS = {"User-Agent": "stock-analyzer (personal research; contact: ctsockey@gmail.com)"}
 _HTTP_TIMEOUT = 15
+_FINNHUB = "https://finnhub.io/api/v1"
+
+
+def finnhub_key() -> str | None:
+    """Resolve the Finnhub key from Streamlit secrets or the environment."""
+    try:
+        import streamlit as st  # imported lazily so the module works outside Streamlit
+
+        k = st.secrets.get("FINNHUB_KEY", "")
+        if k:
+            return k
+    except Exception:
+        pass
+    return os.environ.get("FINNHUB_KEY") or None
+
+
+def _num(v: Any) -> float | None:
+    """Coerce to float, treating Finnhub's None/empty/0-as-missing gracefully."""
+    try:
+        if v is None or v == "":
+            return None
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _frac(v: Any) -> float | None:
+    """Finnhub returns percentages (e.g. 27 for 27%); yfinance uses fractions (0.27).
+
+    The scorer is written against yfinance conventions, so convert percent -> fraction.
+    """
+    n = _num(v)
+    return n / 100 if n is not None else None
 
 
 # --------------------------------------------------------------------------- #
 # Core ticker data
 # --------------------------------------------------------------------------- #
 def get_info(ticker: str) -> dict[str, Any]:
-    """Fundamental + descriptive fields for a ticker (yfinance .info)."""
+    """Fundamental + descriptive fields, normalized to yfinance `.info` key names.
+
+    Tries Finnhub first (works on cloud); falls back to yfinance (works locally).
+    """
+    key = finnhub_key()
+    if key:
+        info = _finnhub_info(ticker, key)
+        if info.get("currentPrice"):  # got real data from Finnhub
+            return info
+    return _yf_info(ticker)
+
+
+def _yf_info(ticker: str) -> dict[str, Any]:
     try:
-        info = yf.Ticker(ticker).info or {}
-        # yfinance sometimes returns a near-empty dict for bad/delisted tickers.
-        if not info.get("regularMarketPrice") and not info.get("currentPrice"):
-            # Still may have data under longName; keep it but flag price absence.
-            pass
-        return info
+        return yf.Ticker(ticker).info or {}
     except Exception:
         return {}
 
 
+def _finnhub_info(ticker: str, key: str) -> dict[str, Any]:
+    """Build a yfinance-shaped `.info` dict from Finnhub's free endpoints."""
+    ticker = ticker.upper()
+
+    def _get(path: str, **params) -> dict:
+        try:
+            r = requests.get(f"{_FINNHUB}/{path}", params={**params, "token": key}, timeout=_HTTP_TIMEOUT)
+            r.raise_for_status()
+            return r.json() or {}
+        except Exception:
+            return {}
+
+    profile = _get("stock/profile2", symbol=ticker)
+    quote = _get("quote", symbol=ticker)
+    metric = (_get("stock/metric", symbol=ticker, metric="all") or {}).get("metric", {}) or {}
+    target = _get("stock/price-target", symbol=ticker)  # may be empty on free tier
+
+    price = _num(quote.get("c"))
+    pe = _num(metric.get("peTTM")) or _num(metric.get("peBasicExclExtraTTM")) or _num(metric.get("peNormalizedAnnual"))
+    eps_growth = _frac(metric.get("epsGrowthTTMYoy"))
+    peg = None
+    if pe and eps_growth and eps_growth > 0:
+        peg = round(pe / (eps_growth * 100), 2)  # PEG = P/E ÷ growth%
+
+    de = _num(metric.get("totalDebt/totalEquityAnnual")) or _num(metric.get("longTermDebt/equityAnnual"))
+    if de is not None:
+        de *= 100  # Finnhub gives a ratio (1.5); yfinance/scorer expect 150
+
+    return {
+        "longName": profile.get("name") or ticker,
+        "shortName": profile.get("name") or ticker,
+        "sector": profile.get("finnhubIndustry") or "—",
+        "currentPrice": price,
+        "regularMarketPrice": price,
+        "trailingPE": pe,
+        "pegRatio": peg,
+        "priceToSalesTrailing12Months": _num(metric.get("psTTM")),
+        "priceToBook": _num(metric.get("pbAnnual")) or _num(metric.get("pbQuarterly")),
+        "revenueGrowth": _frac(metric.get("revenueGrowthTTMYoy")),
+        "earningsGrowth": eps_growth,
+        "profitMargins": _frac(metric.get("netProfitMarginTTM")),
+        "returnOnEquity": _frac(metric.get("roeTTM")),
+        "debtToEquity": de,
+        "currentRatio": _num(metric.get("currentRatioAnnual")) or _num(metric.get("currentRatioQuarterly")),
+        "freeCashflow": _num(metric.get("freeCashFlowTTM")),
+        "targetMeanPrice": _num(target.get("targetMean")),
+        # 6-month price return (%) — lets the momentum signal work without a price series.
+        "_mom6m": _num(metric.get("26WeekPriceReturnDaily")),
+        "_source": "finnhub",
+    }
+
+
 def get_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
-    """Daily OHLCV history. Empty DataFrame on failure."""
+    """Daily price history via yfinance (works locally).
+
+    On cloud Yahoo blocks the server IP, so this is often empty there; the
+    momentum signal is sourced from Finnhub metrics instead (see analysis.py),
+    and the price chart simply hides when no series is available.
+    """
     try:
         hist = yf.Ticker(ticker).history(period=period, auto_adjust=True)
         return hist if isinstance(hist, pd.DataFrame) else pd.DataFrame()
@@ -67,10 +171,49 @@ def get_institutional_holders(ticker: str) -> pd.DataFrame:
 
 
 def get_insider_transactions(ticker: str) -> pd.DataFrame:
-    """Recent insider (officers/directors) buys and sells, from Form 4 data."""
+    """Recent insider (officers/directors) buys and sells, from Form 4 data.
+
+    Uses Finnhub's free insider-transactions endpoint when a key is present
+    (works on cloud); otherwise falls back to yfinance.
+    """
+    key = finnhub_key()
+    if key:
+        df = _finnhub_insiders(ticker, key)
+        if not df.empty:
+            return df
     try:
         df = yf.Ticker(ticker).insider_transactions
         return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def _finnhub_insiders(ticker: str, key: str) -> pd.DataFrame:
+    """Shape Finnhub insider data into columns the scorer + UI understand."""
+    try:
+        r = requests.get(
+            f"{_FINNHUB}/stock/insider-transactions",
+            params={"symbol": ticker.upper(), "token": key},
+            timeout=_HTTP_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows = (r.json() or {}).get("data", [])
+        if not rows:
+            return pd.DataFrame()
+        # SEC Form 4 codes: P = open-market purchase, S = sale.
+        code_map = {"P": "Purchase", "S": "Sale", "A": "Grant/Award", "M": "Option exercise"}
+        out = []
+        for d in rows[:25]:
+            code = (d.get("transactionCode") or "").upper()
+            out.append(
+                {
+                    "Insider": d.get("name", ""),
+                    "Shares": d.get("change", 0),
+                    "Transaction": code_map.get(code, code or "—"),
+                    "Date": d.get("transactionDate", ""),
+                }
+            )
+        return pd.DataFrame(out)
     except Exception:
         return pd.DataFrame()
 
