@@ -18,22 +18,22 @@ st.set_page_config(page_title="Stock Analyzer", page_icon="📈", layout="wide")
 # --------------------------------------------------------------------------- #
 # Cached wrappers (so the app stays snappy and is gentle on data sources)
 # --------------------------------------------------------------------------- #
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def cached_analyze(ticker: str):
     return analysis.analyze(ticker)
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def cached_history(ticker: str, period: str = "1y"):
     return data.get_price_history(ticker, period)
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def cached_screen(tickers: tuple[str, ...]):
     return analysis.screen(list(tickers))
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def cached_news(ticker: str, key: str | None):
     return data.get_news(ticker, key)
 
@@ -43,12 +43,12 @@ def cached_filings(ticker: str):
     return data.get_sec_filings(ticker)
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def cached_institutional(ticker: str):
     return data.get_institutional_holders(ticker)
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def cached_insiders(ticker: str):
     return data.get_insider_transactions(ticker)
 
@@ -110,6 +110,12 @@ if finnhub_key():
     st.sidebar.success("News: Finnhub key active")
 else:
     st.sidebar.info("News: free Yahoo headlines (add a Finnhub key for sentiment)")
+
+# Data is cached for 5 minutes for speed; this button force-pulls live data now.
+if st.sidebar.button("🔄 Refresh data", use_container_width=True, help="Clear the cache and re-fetch live prices, fundamentals & news"):
+    st.cache_data.clear()
+    st.rerun()
+st.sidebar.caption("Data auto-refreshes every 5 min; click to pull live now.")
 
 
 # --------------------------------------------------------------------------- #
