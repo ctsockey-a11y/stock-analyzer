@@ -72,6 +72,35 @@ def _g(info: dict, *keys, default=None):
 # --------------------------------------------------------------------------- #
 # Individual pillars
 # --------------------------------------------------------------------------- #
+# Finnhub/Yahoo lump crypto miners, quantum, and AI-infra names under a generic
+# "Technology" industry. These overrides give a more honest sub-sector label.
+# Keyed by ticker; falls back to the data provider's industry when not listed.
+_SECTOR_OVERRIDES = {
+    # Bitcoin / crypto miners
+    "RIOT": "Crypto Mining", "MARA": "Crypto Mining", "CLSK": "Crypto Mining",
+    "IREN": "Crypto Mining", "CIFR": "Crypto Mining", "BITF": "Crypto Mining",
+    "HUT": "Crypto Mining", "WULF": "Crypto Mining", "BTBT": "Crypto Mining",
+    "HIVE": "Crypto Mining", "CORZ": "Crypto Mining", "GREE": "Crypto Mining",
+    "BTDR": "Crypto Mining", "SDIG": "Crypto Mining",
+    # AI / HPC data-center infrastructure (often crypto-adjacent)
+    "APLD": "AI/Crypto Infrastructure", "CRWV": "AI Cloud Infrastructure",
+    "NBIS": "AI Cloud Infrastructure",
+    # Quantum computing
+    "QUBT": "Quantum Computing", "RGTI": "Quantum Computing",
+    "IONQ": "Quantum Computing", "QBTS": "Quantum Computing", "ARQQ": "Quantum Computing",
+    # Crypto exchanges / treasuries
+    "COIN": "Crypto Exchange", "MSTR": "Bitcoin Treasury", "HOOD": "Fintech",
+}
+
+
+def refine_sector(ticker: str, raw_sector: str | None) -> str:
+    """Return a precise sub-sector label, overriding generic provider buckets."""
+    override = _SECTOR_OVERRIDES.get(ticker.upper())
+    if override:
+        return override
+    return raw_sector or "—"
+
+
 def _valuation(info: dict) -> Pillar:
     p = Pillar("Valuation", 50, 0.20)
     pe = _g(info, "trailingPE", "forwardPE")
@@ -301,7 +330,7 @@ def analyze(ticker: str) -> Analysis:
         ticker=ticker,
         name=info.get("longName") or info.get("shortName") or ticker,
         price=price,
-        sector=info.get("sector") or "—",
+        sector=refine_sector(ticker, info.get("sector")),
         composite=round(composite, 1),
         verdict=_verdict(composite),
         pillars=pillars,
