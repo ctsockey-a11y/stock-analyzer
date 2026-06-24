@@ -44,6 +44,54 @@ def finnhub_key() -> str | None:
     return os.environ.get("FINNHUB_KEY") or None
 
 
+def alphavantage_key() -> str:
+    """Alpha Vantage key from secrets/env; falls back to the throttled 'demo' key."""
+    try:
+        import streamlit as st
+
+        k = st.secrets.get("ALPHAVANTAGE_KEY", "")
+        if k:
+            return k
+    except Exception:
+        pass
+    return os.environ.get("ALPHAVANTAGE_KEY") or "demo"
+
+
+def get_top_gainers(limit: int = 15) -> list[str]:
+    """Today's biggest gaining US tickers via Alpha Vantage's free movers endpoint.
+
+    Returns a list of clean common-stock tickers (filters out warrants/units).
+    Empty list on failure or rate-limit so the caller can degrade gracefully.
+    """
+    try:
+        r = requests.get(
+            "https://www.alphavantage.co/query",
+            params={"function": "TOP_GAINERS_LOSERS", "apikey": alphavantage_key()},
+            timeout=_HTTP_TIMEOUT,
+        )
+        r.raise_for_status()
+        gainers = (r.json() or {}).get("top_gainers", [])
+        out: list[str] = []
+        for g in gainers:
+            t = (g.get("ticker") or "").upper()
+            try:
+                price = float(g.get("price", 0) or 0)
+            except (TypeError, ValueError):
+                price = 0.0
+            if not t.isalpha() or len(t) > 5:
+                continue
+            if len(t) == 5 and t[-1] in ("W", "R", "U"):  # warrant / right / unit
+                continue
+            if price < 2:  # skip deep penny stocks that dominate day-gainer lists
+                continue
+            out.append(t)
+            if len(out) >= limit:
+                break
+        return out
+    except Exception:
+        return []
+
+
 def _num(v: Any) -> float | None:
     """Coerce to float, treating Finnhub's None/empty/0-as-missing gracefully."""
     try:

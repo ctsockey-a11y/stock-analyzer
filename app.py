@@ -34,6 +34,11 @@ def cached_screen(tickers: tuple[str, ...]):
     return analysis.screen(list(tickers))
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_top_gainers():
+    return tuple(data.get_top_gainers(15))
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_news(ticker: str, key: str | None):
     return data.get_news(ticker, key)
@@ -463,10 +468,14 @@ with tab_screen:
         "High score ≠ guaranteed return — a research starting point, not advice."
     )
 
+    GAINERS_OPT = "🔥 Today's top gainers (live)"
     category = st.selectbox(
         "Pick a universe to scan (no tickers needed):",
-        list(analysis.SCREENER_UNIVERSES.keys()),
+        [GAINERS_OPT] + list(analysis.SCREENER_UNIVERSES.keys()),
     )
+    if category == GAINERS_OPT:
+        st.caption("Pulls the market's biggest movers today (Alpha Vantage). ⚠️ Day-gainers are often "
+                   "thin, speculative small-caps — treat with extra caution.")
     with st.expander("⚙️ Or scan your own custom list instead"):
         custom = st.text_area("Tickers (comma-separated) — overrides the universe above", value="", height=70)
 
@@ -474,6 +483,13 @@ with tab_screen:
         if custom.strip():
             tickers = tuple(t.strip().upper() for t in custom.replace("\n", ",").split(",") if t.strip())
             label = "your custom list"
+        elif category == GAINERS_OPT:
+            with st.spinner("Fetching today's top gainers…"):
+                tickers = cached_top_gainers()
+            label = "today's top gainers"
+            if not tickers:
+                st.warning("Couldn't fetch top gainers right now (the free Alpha Vantage tier may be rate-limited). "
+                           "Add your own free key in Settings → Secrets as ALPHAVANTAGE_KEY for reliable access.")
         else:
             tickers = tuple(analysis.SCREENER_UNIVERSES[category])
             label = category
