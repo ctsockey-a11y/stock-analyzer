@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
+import re
 from typing import Any
 
 import pandas as pd
@@ -490,6 +491,105 @@ def get_sec_filings(ticker: str, limit: int = 15) -> list[dict[str, Any]]:
         return out[:limit]
     except Exception:
         return []
+
+
+# --------------------------------------------------------------------------- #
+# Congressional (US House) stock trades — parsed from the official Clerk filings
+# (free, no key, not IP-blocked). Members file Periodic Transaction Reports (PTRs)
+# under the STOCK Act; we read the year's bulk index then parse the typed PDFs.
+# --------------------------------------------------------------------------- #
+_HOUSE = "https://disclosures-clerk.house.gov/public_disc"
+_TXN_LABELS = {"P": "Buy", "S": "Sell", "E": "Exchange"}
+# Holding row in a PTR: "<asset> (TICKER) [ST] <type> <txdate><notifdate><amount>".
+_PTR_ROW = re.compile(
+    r"\(([A-Z]{1,5})\)\s*\[ST\]\s*([PSE])(\s*\(partial\))?\s*"
+    r"(\d{2}/\d{2}/\d{4})\d{2}/\d{2}/\d{4}(\$[\d,]+\s*-\s*\$[\d,]+)"
+)
+
+
+def _house_ptr_index(year: int) -> list[dict[str, Any]]:
+    """Return the year's PTR (stock-trade) filings from the House bulk index."""
+    import io
+    import zipfile
+
+    try:
+        r = requests.get(f"{_HOUSE}/financial-pdfs/{year}FD.ZIP", headers=SEC_HEADERS, timeout=_HTTP_TIMEOUT)
+        r.raise_for_status()
+        xml = zipfile.ZipFile(io.BytesIO(r.content)).read(f"{year}FD.xml").decode("utf-8", "ignore")
+    except Exception:
+        return []
+    out = []
+    for rec in re.findall(r"<Member>(.*?)</Member>", xml, re.S):
+        if "<FilingType>P</FilingType>" not in rec:
+            continue
+
+        def field(tag: str) -> str:
+            m = re.search(fr"<{tag}>(.*?)</{tag}>", rec)
+            return m.group(1).strip() if m else ""
+
+        try:
+            d = _dt.datetime.strptime(field("FilingDate"), "%m/%d/%Y")
+        except ValueError:
+            d = _dt.datetime.min
+        out.append(
+            {
+                "name": f"{field('First')} {field('Last')}".strip(),
+                "state": field("StateDst"),
+                "docid": field("DocID"),
+                "date": d,
+                "year": year,
+            }
+        )
+    return out
+
+
+def _parse_house_ptr(year: int, docid: str) -> list[dict[str, str]]:
+    """Extract individual trades from one PTR PDF. Empty if scanned/unparseable."""
+    import io
+
+    try:
+        from pypdf import PdfReader
+
+        r = requests.get(f"{_HOUSE}/ptr-pdfs/{year}/{docid}.pdf", headers=SEC_HEADERS, timeout=_HTTP_TIMEOUT)
+        if r.status_code != 200 or r.content[:4] != b"%PDF":
+            return []
+        text = "\n".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(r.content)).pages)
+    except Exception:
+        return []
+    trades = []
+    for ticker, typ, partial, date, amount in _PTR_ROW.findall(text):
+        label = _TXN_LABELS.get(typ, typ) + (" (partial)" if partial else "")
+        trades.append(
+            {
+                "ticker": ticker,
+                "type": label,
+                "date": date,
+                "amount": re.sub(r"\s+", " ", amount).strip(),
+                "doc_url": f"{_HOUSE}/ptr-pdfs/{year}/{docid}.pdf",
+            }
+        )
+    return trades
+
+
+def get_congress_trades(max_reports: int = 25, ticker: str | None = None) -> list[dict[str, Any]]:
+    """Recent US House stock trades from official Clerk PTR filings.
+
+    Parses the most recent `max_reports` filings (each may contain several
+    trades). House (Representatives) only — the Senate uses a separate
+    anti-bot system. Data has a reporting lag and amounts are disclosed as
+    ranges, per the STOCK Act.
+    """
+    year = _dt.date.today().year
+    index = _house_ptr_index(year) or _house_ptr_index(year - 1)
+    index.sort(key=lambda r: r["date"], reverse=True)
+    rows: list[dict[str, Any]] = []
+    for rec in index[:max_reports]:
+        for t in _parse_house_ptr(rec["year"], rec["docid"]):
+            t.update({"member": rec["name"], "state": rec["state"], "filed": rec["date"].strftime("%m/%d/%Y")})
+            rows.append(t)
+    if ticker:
+        rows = [r for r in rows if r["ticker"] == ticker.upper()]
+    return rows
 
 
 _CIK_CACHE: dict[str, str] | None = None

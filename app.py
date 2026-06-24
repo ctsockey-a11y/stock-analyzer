@@ -39,6 +39,11 @@ def cached_top_gainers():
     return tuple(data.get_top_gainers(15))
 
 
+@st.cache_data(ttl=10800, show_spinner=False)  # 3h: filings update slowly
+def cached_congress_trades(max_reports: int = 25):
+    return data.get_congress_trades(max_reports)
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_news(ticker: str, key: str | None):
     return data.get_news(ticker, key)
@@ -208,8 +213,8 @@ st.sidebar.caption("Data auto-refreshes every 5 min; click to pull live now.")
 # --------------------------------------------------------------------------- #
 # Main tabs
 # --------------------------------------------------------------------------- #
-tab_portfolio, tab_stock, tab_screen = st.tabs(
-    ["💼 My Portfolio", "🔬 Analyze a Stock", "🚀 Opportunity Screener"]
+tab_portfolio, tab_stock, tab_screen, tab_congress = st.tabs(
+    ["💼 My Portfolio", "🔬 Analyze a Stock", "🚀 Opportunity Screener", "🏛️ Congress Trades"]
 )
 
 # ---- Portfolio tab -------------------------------------------------------- #
@@ -513,6 +518,48 @@ with tab_screen:
                 use_container_width=True,
                 hide_index=True,
             )
+
+# ---- Congress trades ------------------------------------------------------- #
+with tab_congress:
+    st.header("🏛️ Congressional stock trades")
+    st.caption(
+        "Recent trades by **US House Representatives**, parsed live from the official "
+        "[House Clerk](https://disclosures-clerk.house.gov) disclosure filings (free, no API). "
+        "Members must report under the STOCK Act, but with a **lag** (up to ~30-45 days) and "
+        "amounts are disclosed as **ranges**. *Senate (senators) uses a separate anti-bot system "
+        "and isn't included yet.*"
+    )
+    cf1, cf2 = st.columns([2, 1])
+    filt_ticker = cf1.text_input("Filter by ticker (optional)", value="").strip().upper()
+    if st.button("🏛️ Load recent congressional trades", type="primary"):
+        with st.spinner("Reading the latest House disclosure filings… (~20-40s first time)"):
+            trades = cached_congress_trades(25)
+        if filt_ticker:
+            trades = [t for t in trades if t["ticker"] == filt_ticker]
+        if not trades:
+            st.warning("No trades parsed right now"
+                       + (f" for {filt_ticker}." if filt_ticker else " (filings may be momentarily unavailable)."))
+        else:
+            tdf = pd.DataFrame(trades)[["filed", "member", "state", "type", "ticker", "amount"]]
+            tdf.columns = ["Filed", "Member", "State", "Type", "Ticker", "Amount"]
+
+            def _txn_color(v):
+                if "Buy" in str(v):
+                    return "color: #16c784"
+                if "Sell" in str(v):
+                    return "color: #ea3943"
+                return ""
+
+            st.success(f"Showing {len(tdf)} trades from the {tdf['Member'].nunique()} most recent filers.")
+            st.dataframe(
+                tdf.style.map(_txn_color, subset=["Type"]),
+                use_container_width=True, hide_index=True,
+            )
+            # Most-traded tickers in this batch
+            top = pd.Series([t["ticker"] for t in trades]).value_counts().head(8)
+            if not top.empty:
+                st.markdown("**Most-active tickers in recent filings:** " +
+                            " · ".join(f"`{tk}` ({n})" for tk, n in top.items()))
 
 st.sidebar.divider()
 st.sidebar.caption(
