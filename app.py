@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from streamlit_local_storage import LocalStorage
 
 from analyzer import analysis, data, portfolio
 
@@ -84,14 +85,27 @@ st.sidebar.title("📈 Stock Analyzer")
 st.sidebar.caption("Free equity research from yfinance, SEC EDGAR & news.")
 
 st.sidebar.subheader("Your holdings")
-mode = st.sidebar.radio(
-    "Load holdings from:",
-    ["Sample portfolio", "Upload CSV", "Type manually"],
-    label_visibility="collapsed",
-)
+
+# Holdings persist in this browser's local storage (private to your device).
+local_store = LocalStorage()
+saved_csv = None
+try:
+    saved_csv = local_store.getItem("saved_holdings")
+except Exception:
+    saved_csv = None
+
+base_modes = ["Sample portfolio", "Upload CSV", "Type manually"]
+modes = (["My saved holdings"] + base_modes) if saved_csv else base_modes
+mode = st.sidebar.radio("Load holdings from:", modes, label_visibility="collapsed")
 
 holdings_df = None
-if mode == "Sample portfolio":
+if mode == "My saved holdings":
+    holdings_df = portfolio.parse_holdings(saved_csv)
+    st.sidebar.caption("✓ Loaded from this browser.")
+    if st.sidebar.button("🗑️ Clear saved holdings", use_container_width=True):
+        local_store.deleteItem("saved_holdings")
+        st.rerun()
+elif mode == "Sample portfolio":
     holdings_df = portfolio.parse_holdings(open("data/sample_holdings.csv").read())
 elif mode == "Upload CSV":
     up = st.sidebar.file_uploader("CSV with columns: ticker, shares, cost_basis", type="csv")
@@ -105,6 +119,12 @@ else:
         height=120,
     )
     holdings_df = portfolio.parse_holdings("ticker,shares,cost_basis\n" + txt)
+
+# Offer to remember the current holdings in this browser (works for upload + manual).
+if mode != "My saved holdings" and holdings_df is not None and not holdings_df.empty:
+    if st.sidebar.button("💾 Save these holdings to this browser", use_container_width=True):
+        local_store.setItem("saved_holdings", holdings_df.to_csv(index=False), key="save_holdings")
+        st.sidebar.success("Saved! They'll load automatically next time on this device.")
 
 if finnhub_key():
     st.sidebar.success("News: Finnhub key active")
