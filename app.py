@@ -374,20 +374,36 @@ with tab_stock:
 with tab_screen:
     st.header("Find high-potential stocks")
     st.caption(
-        "Ranks a list by an **opportunity score** that tilts toward growth + smart-money "
-        "conviction at a not-yet-stretched valuation. High score ≠ guaranteed return — "
-        "treat it as a research starting point, not advice."
+        "Scans a ready-made universe and ranks it by an **opportunity score** that tilts "
+        "toward growth + smart-money conviction at a not-yet-stretched valuation. "
+        "High score ≠ guaranteed return — a research starting point, not advice."
     )
-    default_universe = "NVDA,AMD,PLTR,SMCI,TSLA,META,AVGO,MU,CRWD,SHOP,UBER,SOFI,COIN,ARM,DELL"
-    universe = st.text_area("Tickers to scan (comma-separated)", value=default_universe, height=80)
-    if st.button("🚀 Run screener", type="primary"):
-        tickers = tuple(t.strip().upper() for t in universe.replace("\n", ",").split(",") if t.strip())
-        with st.spinner(f"Scanning {len(tickers)} tickers… (first run pulls live data)"):
+
+    category = st.selectbox(
+        "Pick a universe to scan (no tickers needed):",
+        list(analysis.SCREENER_UNIVERSES.keys()),
+    )
+    with st.expander("⚙️ Or scan your own custom list instead"):
+        custom = st.text_area("Tickers (comma-separated) — overrides the universe above", value="", height=70)
+
+    if st.button("🔎 Find opportunities", type="primary"):
+        if custom.strip():
+            tickers = tuple(t.strip().upper() for t in custom.replace("\n", ",").split(",") if t.strip())
+            label = "your custom list"
+        else:
+            tickers = tuple(analysis.SCREENER_UNIVERSES[category])
+            label = category
+        with st.spinner(f"Scanning {len(tickers)} stocks in {label}… first run pulls live data (~1-2 min)."):
             res = cached_screen(tickers)
         if res.empty:
-            st.warning("No results — check the tickers.")
+            st.warning("No results — try again in a moment (the free data API may be rate-limited).")
         else:
-            st.success(f"Ranked {len(res)} stocks by opportunity.")
+            st.success(f"Top opportunities in {label} — ranked by opportunity score.")
+            best = res.iloc[0]
+            st.markdown(
+                f"🏆 **Top pick: {best['Ticker']}** ({best['Name']}) — opportunity {best['Opportunity']:.0f}/100, "
+                f"{best['Verdict']}. *{best['Top reason']}*"
+            )
             st.dataframe(
                 res.style.format({"Price": "${:,.2f}", "Opportunity": "{:.0f}", "Composite": "{:.0f}"}, na_rep="—")
                 .background_gradient(subset=["Opportunity"], cmap="RdYlGn", vmin=0, vmax=100),

@@ -369,6 +369,34 @@ def _verdict(score: float) -> str:
 # --------------------------------------------------------------------------- #
 # Opportunity screener: "stocks that could produce incredible returns"
 # --------------------------------------------------------------------------- #
+# Ready-made universes so the screener can find ideas with zero user input.
+# Kept to liquid, US-listed names so Finnhub/yfinance resolve them reliably, and
+# sized so a scan stays within the free Finnhub rate limit in ~1-2 minutes.
+SCREENER_UNIVERSES: dict[str, list[str]] = {
+    "🔥 Broad mix": [
+        "NVDA", "AMD", "PLTR", "AVGO", "MU", "SMCI", "TSLA", "META", "MSFT",
+        "AMZN", "COIN", "MSTR", "MARA", "SHOP", "UBER", "SOFI", "CRWD", "ARM", "DELL", "NET",
+    ],
+    "Big Tech & Semiconductors": [
+        "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "AVGO", "AMD",
+        "MU", "QCOM", "INTC", "ARM", "MRVL", "TSM", "SMCI",
+    ],
+    "AI & Data Infrastructure": [
+        "NVDA", "PLTR", "SNOW", "DELL", "ORCL", "NBIS", "CRWV", "APLD",
+        "SMCI", "NET", "DDOG", "CRWD", "ANET", "VRT",
+    ],
+    "Crypto & Miners": [
+        "COIN", "MSTR", "MARA", "RIOT", "CLSK", "IREN", "HUT", "BITF",
+        "WULF", "CIFR", "BTBT", "HOOD",
+    ],
+    "Quantum Computing": ["IONQ", "QUBT", "RGTI", "QBTS", "ARQQ"],
+    "High-growth": [
+        "SHOP", "UBER", "SOFI", "RBLX", "ABNB", "DASH", "NET", "DDOG",
+        "CRWD", "SNOW", "PLTR", "TTD", "RDDT", "HOOD",
+    ],
+}
+
+
 def opportunity_score(a: Analysis) -> float:
     """Re-weight an analysis toward asymmetric upside potential.
 
