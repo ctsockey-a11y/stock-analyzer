@@ -74,6 +74,24 @@ def score_color(score: float) -> str:
     return "#ea3943"
 
 
+def opportunity_bg(v) -> str:
+    """Red→yellow→green cell background for a 0-100 score.
+
+    Hand-rolled so we don't need matplotlib (which pandas' background_gradient
+    requires and which isn't installed on the cloud).
+    """
+    if pd.isna(v):
+        return ""
+    t = max(0.0, min(1.0, float(v) / 100))
+    if t < 0.5:
+        f = t / 0.5
+        r, g, b = 234 + (224 - 234) * f, 57 + (181 - 57) * f, 67 + (0 - 67) * f
+    else:
+        f = (t - 0.5) / 0.5
+        r, g, b = 224 + (22 - 224) * f, 181 + (199 - 181) * f, 0 + (132 - 0) * f
+    return f"background-color: rgba({int(r)},{int(g)},{int(b)},0.35)"
+
+
 def verdict_badge(a) -> str:
     return f"<span style='background:{score_color(a.composite)};color:#0e1117;padding:3px 10px;border-radius:6px;font-weight:700'>{a.verdict} · {a.composite:.0f}/100</span>"
 
@@ -406,7 +424,7 @@ with tab_screen:
             )
             st.dataframe(
                 res.style.format({"Price": "${:,.2f}", "Opportunity": "{:.0f}", "Composite": "{:.0f}"}, na_rep="—")
-                .background_gradient(subset=["Opportunity"], cmap="RdYlGn", vmin=0, vmax=100),
+                .map(opportunity_bg, subset=["Opportunity"]),
                 use_container_width=True,
                 hide_index=True,
             )
