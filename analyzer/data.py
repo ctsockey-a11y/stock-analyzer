@@ -151,7 +151,8 @@ def _finnhub_info(ticker: str, key: str) -> dict[str, Any]:
         "operatingMargins": _frac(metric.get("operatingMarginTTM")),
         "returnOnAssets": _frac(metric.get("roaTTM")),
         "trailingEps": _num(metric.get("epsTTM")),
-        "averageVolume": _num(metric.get("10DayAverageTradingVolume")),
+        # Finnhub reports avg volume in millions of shares; ×1e6 to match yfinance's raw count.
+        "averageVolume": (_num(metric.get("10DayAverageTradingVolume")) or 0) * 1e6 or None,
         "_ret5d": _num(metric.get("5DayPriceReturnDaily")),
         "_ret13w": _num(metric.get("13WeekPriceReturnDaily")),
         "_retytd": _num(metric.get("yearToDatePriceReturnDaily")),
