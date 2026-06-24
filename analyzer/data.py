@@ -583,8 +583,14 @@ def get_congress_trades(max_reports: int = 25, ticker: str | None = None) -> lis
     index = _house_ptr_index(year) or _house_ptr_index(year - 1)
     index.sort(key=lambda r: r["date"], reverse=True)
     rows: list[dict[str, Any]] = []
+    seen: set[tuple] = set()
     for rec in index[:max_reports]:
         for t in _parse_house_ptr(rec["year"], rec["docid"]):
+            # Dedupe exact repeats (some PDFs list a holding twice when extracted).
+            key = (rec["docid"], t["ticker"], t["type"], t["date"], t["amount"])
+            if key in seen:
+                continue
+            seen.add(key)
             t.update({"member": rec["name"], "state": rec["state"], "filed": rec["date"].strftime("%m/%d/%Y")})
             rows.append(t)
     if ticker:
