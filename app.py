@@ -111,6 +111,16 @@ elif mode == "Upload CSV":
     up = st.sidebar.file_uploader("CSV with columns: ticker, shares, cost_basis", type="csv")
     if up is not None:
         holdings_df = portfolio.parse_holdings(up.getvalue())
+        # Auto-save to this browser, but only when the parsed holdings actually
+        # change — guards against re-saving on every rerun.
+        if not holdings_df.empty:
+            csv_str = holdings_df.to_csv(index=False)
+            if st.session_state.get("_saved_holdings_csv") != csv_str:
+                local_store.setItem("saved_holdings", csv_str, key="autosave_holdings")
+                st.session_state["_saved_holdings_csv"] = csv_str
+                st.sidebar.success("✓ Saved to this browser — loads automatically next time.")
+            else:
+                st.sidebar.caption("✓ Saved to this browser.")
     st.sidebar.caption("Tip: most brokers can export a positions CSV.")
 else:
     txt = st.sidebar.text_area(
@@ -120,10 +130,11 @@ else:
     )
     holdings_df = portfolio.parse_holdings("ticker,shares,cost_basis\n" + txt)
 
-# Offer to remember the current holdings in this browser (works for upload + manual).
-if mode != "My saved holdings" and holdings_df is not None and not holdings_df.empty:
+# Manual save for the sample/manual modes (Upload auto-saves above).
+if mode in ("Sample portfolio", "Type manually") and holdings_df is not None and not holdings_df.empty:
     if st.sidebar.button("💾 Save these holdings to this browser", use_container_width=True):
         local_store.setItem("saved_holdings", holdings_df.to_csv(index=False), key="save_holdings")
+        st.session_state["_saved_holdings_csv"] = holdings_df.to_csv(index=False)
         st.sidebar.success("Saved! They'll load automatically next time on this device.")
 
 if finnhub_key():
