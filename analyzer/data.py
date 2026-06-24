@@ -598,6 +598,132 @@ def get_congress_trades(max_reports: int = 25, ticker: str | None = None) -> lis
     return rows
 
 
+# --------------------------------------------------------------------------- #
+# Senate stock trades — from the official Senate eFD system (free). Requires a
+# CSRF + agreement handshake, then the report search returns JSON; electronic
+# PTRs render a transactions table we parse with pandas.
+# --------------------------------------------------------------------------- #
+_SENATE = "https://efdsearch.senate.gov"
+_BROWSER_UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"}
+
+
+def _normalize_txn(raw: str) -> str:
+    raw = (raw or "").strip()
+    if "Purchase" in raw:
+        return "Buy"
+    if "Sale" in raw:
+        return "Sell (partial)" if "Partial" in raw else "Sell"
+    if "Exchange" in raw:
+        return "Exchange"
+    return raw
+
+
+def get_senate_trades(max_reports: int = 20, ticker: str | None = None) -> list[dict[str, Any]]:
+    """Recent US Senate stock trades from the official Senate eFD system."""
+    import io
+
+    import pandas as pd
+
+    rows: list[dict[str, Any]] = []
+    try:
+        s = requests.Session()
+        s.headers.update(_BROWSER_UA)
+        landing = s.get(f"{_SENATE}/search/", timeout=_HTTP_TIMEOUT)
+        m = re.search(r'name="csrfmiddlewaretoken"\s+value="([^"]+)"', landing.text)
+        csrf = m.group(1) if m else s.cookies.get("csrftoken")
+        s.post(f"{_SENATE}/search/home/", data={"csrfmiddlewaretoken": csrf, "prohibition_agreement": "1"},
+               headers={"Referer": f"{_SENATE}/search/"}, timeout=_HTTP_TIMEOUT)
+        csrf = s.cookies.get("csrftoken") or csrf
+        year = _dt.date.today().year
+        payload = {"csrfmiddlewaretoken": csrf, "start": "0", "length": str(max_reports),
+                   "report_types": "[11]", "filer_types": "[]",
+                   "submitted_start_date": f"01/01/{year} 00:00:00", "submitted_end_date": "",
+                   "draw": "1", "order[0][column]": "4", "order[0][dir]": "desc"}
+        for i in range(5):
+            payload[f"columns[{i}][data]"] = str(i)
+        data = s.post(f"{_SENATE}/search/report/data/", data=payload,
+                      headers={"Referer": f"{_SENATE}/search/", "X-Requested-With": "XMLHttpRequest"},
+                      timeout=_HTTP_TIMEOUT).json()
+        for row in data.get("data", [])[:max_reports]:
+            href = re.search(r'href="([^"]+)"', row[3])
+            if not href or "/ptr/" not in href.group(1):  # skip scanned/paper filings
+                continue
+            member = f"{row[0]} {row[1]}".strip()
+            filed = row[4]
+            try:
+                pg = s.get(_SENATE + href.group(1), headers={"Referer": f"{_SENATE}/search/"}, timeout=_HTTP_TIMEOUT)
+                tbl = pd.read_html(io.StringIO(pg.text))[0]
+            except Exception:
+                continue
+            for _, tr in tbl.iterrows():
+                tk = str(tr.get("Ticker", "")).strip().upper()
+                if not tk or tk in ("--", "NAN", "") or not tk.replace(".", "").isalnum():
+                    continue
+                rows.append({"member": member, "filed": filed, "ticker": tk,
+                             "type": _normalize_txn(str(tr.get("Type", ""))),
+                             "amount": str(tr.get("Amount", "")).strip(),
+                             "date": str(tr.get("Transaction Date", "")).strip()})
+    except Exception:
+        pass
+    if ticker:
+        rows = [r for r in rows if r["ticker"] == ticker.upper()]
+    return rows
+
+
+# --------------------------------------------------------------------------- #
+# Big-investor 13F holdings — what famous funds own, from free SEC EDGAR data.
+# 13F values are reported in whole dollars (post-2023 SEC rule). ~45-day lag.
+# --------------------------------------------------------------------------- #
+FAMOUS_FUNDS = {
+    "Berkshire Hathaway — Warren Buffett": "0001067983",
+    "Scion Asset Mgmt — Michael Burry": "0001649339",
+    "Pershing Square — Bill Ackman": "0001336528",
+    "Bridgewater — Ray Dalio": "0001350694",
+    "Renaissance Technologies": "0001037389",
+    "Appaloosa — David Tepper": "0001656456",
+    "Third Point — Dan Loeb": "0001040273",
+}
+
+
+def get_13f_holdings(cik: str, top: int = 15) -> dict[str, Any]:
+    """Latest 13F-HR holdings for a fund CIK, aggregated by issuer and sorted by value."""
+    cik = cik.zfill(10)
+    try:
+        sub = requests.get(f"https://data.sec.gov/submissions/CIK{cik}.json", headers=SEC_HEADERS, timeout=_HTTP_TIMEOUT).json()
+        rec = sub["filings"]["recent"]
+        idx = next((i for i, f in enumerate(rec["form"]) if f == "13F-HR"), None)
+        if idx is None:
+            return {"filed": None, "holdings": []}
+        acc = rec["accessionNumber"][idx].replace("-", "")
+        filed = rec["filingDate"][idx]
+        folder = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc}"
+        fi = requests.get(f"{folder}/index.json", headers=SEC_HEADERS, timeout=_HTTP_TIMEOUT).json()
+        names = [it["name"] for it in fi["directory"]["item"]]
+        cand = [n for n in names if n.lower().endswith(".xml") and "primary" not in n.lower()]
+        if not cand:
+            return {"filed": filed, "holdings": []}
+        xml = requests.get(f"{folder}/{cand[0]}", headers=SEC_HEADERS, timeout=_HTTP_TIMEOUT).text
+        value: dict[str, int] = {}
+        shares: dict[str, int] = {}
+        for blk in re.findall(r"<(?:\w+:)?infoTable>(.*?)</(?:\w+:)?infoTable>", xml, re.S):
+            nm = re.search(r"<(?:\w+:)?nameOfIssuer>(.*?)<", blk)
+            vl = re.search(r"<(?:\w+:)?value>(.*?)<", blk)
+            sh = re.search(r"<(?:\w+:)?sshPrnamt>(.*?)<", blk)
+            if nm and vl:
+                n = nm.group(1).strip().title()
+                value[n] = value.get(n, 0) + int(vl.group(1))
+                if sh:
+                    shares[n] = shares.get(n, 0) + int(sh.group(1))
+        total = sum(value.values()) or 1
+        holdings = [{"issuer": n, "value": v, "pct": v / total * 100, "shares": shares.get(n, 0)}
+                    for n, v in value.items()]
+        holdings.sort(key=lambda x: -x["value"])
+        return {"filed": filed, "holdings": holdings[:top], "total": total, "positions": len(value)}
+    except Exception:
+        return {"filed": None, "holdings": []}
+
+
 _CIK_CACHE: dict[str, str] | None = None
 
 

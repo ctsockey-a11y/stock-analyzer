@@ -44,6 +44,16 @@ def cached_congress_trades(max_reports: int = 25):
     return data.get_congress_trades(max_reports)
 
 
+@st.cache_data(ttl=10800, show_spinner=False)
+def cached_senate_trades(max_reports: int = 20):
+    return data.get_senate_trades(max_reports)
+
+
+@st.cache_data(ttl=21600, show_spinner=False)  # 6h: 13F filings are quarterly
+def cached_13f(cik: str):
+    return data.get_13f_holdings(cik, 15)
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_news(ticker: str, key: str | None):
     return data.get_news(ticker, key)
@@ -213,8 +223,9 @@ st.sidebar.caption("Data auto-refreshes every 5 min; click to pull live now.")
 # --------------------------------------------------------------------------- #
 # Main tabs
 # --------------------------------------------------------------------------- #
-tab_portfolio, tab_stock, tab_screen, tab_congress = st.tabs(
-    ["💼 My Portfolio", "🔬 Analyze a Stock", "🚀 Opportunity Screener", "🏛️ Congress Trades"]
+tab_portfolio, tab_stock, tab_screen, tab_congress, tab_funds = st.tabs(
+    ["💼 My Portfolio", "🔬 Analyze a Stock", "🚀 Opportunity Screener",
+     "🏛️ Congress Trades", "🏦 Big Investors"]
 )
 
 # ---- Portfolio tab -------------------------------------------------------- #
@@ -520,46 +531,71 @@ with tab_screen:
             )
 
 # ---- Congress trades ------------------------------------------------------- #
+def _txn_color(v):
+    s = str(v)
+    if "Buy" in s:
+        return "color: #16c784"
+    if "Sell" in s:
+        return "color: #ea3943"
+    return ""
+
+
 with tab_congress:
     st.header("🏛️ Congressional stock trades")
     st.caption(
-        "Recent trades by **US House Representatives**, parsed live from the official "
-        "[House Clerk](https://disclosures-clerk.house.gov) disclosure filings (free, no API). "
-        "Members must report under the STOCK Act, but with a **lag** (up to ~30-45 days) and "
-        "amounts are disclosed as **ranges**. *Senate (senators) uses a separate anti-bot system "
-        "and isn't included yet.*"
+        "Recent trades by members of Congress, parsed live from the official disclosure systems "
+        "([House Clerk](https://disclosures-clerk.house.gov) & [Senate eFD](https://efdsearch.senate.gov)) — "
+        "free, no API. Reported under the STOCK Act with a **lag** (~30-45 days); amounts are **ranges**."
     )
-    cf1, cf2 = st.columns([2, 1])
-    filt_ticker = cf1.text_input("Filter by ticker (optional)", value="").strip().upper()
-    if st.button("🏛️ Load recent congressional trades", type="primary"):
-        with st.spinner("Reading the latest House disclosure filings… (~20-40s first time)"):
-            trades = cached_congress_trades(25)
+    chamber = st.radio("Chamber", ["🏛️ House (Representatives)", "🏦 Senate (Senators)"],
+                       horizontal=True, label_visibility="collapsed")
+    filt_ticker = st.text_input("Filter by ticker (optional)", value="", key="cong_filt").strip().upper()
+    if st.button("Load recent trades", type="primary", key="load_congress"):
+        is_house = chamber.startswith("🏛️")
+        with st.spinner(f"Reading the latest {'House' if is_house else 'Senate'} disclosure filings… (~20-40s first time)"):
+            trades = cached_congress_trades(25) if is_house else cached_senate_trades(20)
         if filt_ticker:
             trades = [t for t in trades if t["ticker"] == filt_ticker]
         if not trades:
             st.warning("No trades parsed right now"
                        + (f" for {filt_ticker}." if filt_ticker else " (filings may be momentarily unavailable)."))
         else:
-            tdf = pd.DataFrame(trades)[["filed", "member", "state", "type", "ticker", "amount"]]
-            tdf.columns = ["Filed", "Member", "State", "Type", "Ticker", "Amount"]
-
-            def _txn_color(v):
-                if "Buy" in str(v):
-                    return "color: #16c784"
-                if "Sell" in str(v):
-                    return "color: #ea3943"
-                return ""
-
+            cols = ["filed", "member", "state", "type", "ticker", "amount"] if is_house \
+                else ["filed", "member", "date", "type", "ticker", "amount"]
+            tdf = pd.DataFrame(trades)[cols]
+            tdf.columns = ["Filed", "Member", "State" if is_house else "Txn date", "Type", "Ticker", "Amount"]
             st.success(f"Showing {len(tdf)} trades from the {tdf['Member'].nunique()} most recent filers.")
-            st.dataframe(
-                tdf.style.map(_txn_color, subset=["Type"]),
-                use_container_width=True, hide_index=True,
-            )
-            # Most-traded tickers in this batch
+            st.dataframe(tdf.style.map(_txn_color, subset=["Type"]), use_container_width=True, hide_index=True)
             top = pd.Series([t["ticker"] for t in trades]).value_counts().head(8)
             if not top.empty:
                 st.markdown("**Most-active tickers in recent filings:** " +
                             " · ".join(f"`{tk}` ({n})" for tk, n in top.items()))
+
+# ---- Big investors (13F) --------------------------------------------------- #
+with tab_funds:
+    st.header("🏦 What big investors own")
+    st.caption(
+        "Latest **13F holdings** of famous funds, from free SEC EDGAR filings. Funds managing >$100M "
+        "must disclose US equity holdings quarterly — but with a **~45-day lag**, and 13F shows long "
+        "positions only (no shorts/options detail). Values are total position size."
+    )
+    fund = st.selectbox("Pick an investor", list(data.FAMOUS_FUNDS.keys()))
+    if st.button("📂 Load latest 13F holdings", type="primary"):
+        with st.spinner(f"Fetching {fund}'s latest 13F from SEC EDGAR…"):
+            res = cached_13f(data.FAMOUS_FUNDS[fund])
+        if not res.get("holdings"):
+            st.warning("Couldn't load holdings right now — try again in a moment.")
+        else:
+            st.success(f"**{fund}** — 13F filed {res['filed']} · {res['positions']} positions · "
+                       f"${res['total'] / 1e9:,.1f}B total reported value.")
+            hdf = pd.DataFrame(res["holdings"])
+            hdf = hdf.rename(columns={"issuer": "Company", "value": "Value", "pct": "% of portfolio", "shares": "Shares"})
+            st.dataframe(
+                hdf.style.format({"Value": fmt_big_money, "% of portfolio": "{:.1f}%", "Shares": "{:,.0f}"})
+                .bar(subset=["% of portfolio"], color="#16c784"),
+                use_container_width=True, hide_index=True,
+            )
+            st.caption("Tip: paste any of these tickers' companies into the 🔬 Analyze a Stock tab for a full breakdown.")
 
 st.sidebar.divider()
 st.sidebar.caption(
