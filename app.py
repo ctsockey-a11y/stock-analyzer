@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_local_storage import LocalStorage
 
-from analyzer import analysis, data, portfolio
+from analyzer import analysis, data, portfolio, smartmoney
 
 st.set_page_config(page_title="Stock Analyzer", page_icon="📈", layout="wide")
 
@@ -52,6 +52,16 @@ def cached_senate_trades(max_reports: int = 20):
 @st.cache_data(ttl=21600, show_spinner=False)  # 6h: 13F filings are quarterly
 def cached_13f(cik: str):
     return data.get_13f_holdings(cik, 15)
+
+
+@st.cache_data(ttl=10800, show_spinner=False)
+def cached_congress_activity():
+    return smartmoney.congress_activity()
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def cached_fund_activity():
+    return smartmoney.fund_activity()
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -327,6 +337,34 @@ with tab_portfolio:
                 fig2.update_layout(height=340, margin=dict(t=40, b=0, l=0, r=0))
                 st.plotly_chart(fig2, use_container_width=True)
 
+            # Smart-money check: flag holdings recently traded by Congress or held by big funds.
+            st.subheader("🔎 Smart-money activity in your holdings")
+            st.caption("Cross-checks your tickers against recent Congress trades and famous funds' 13F holdings.")
+            if st.button("Check Congress & big-investor activity", key="sm_check"):
+                with st.spinner("Cross-referencing Congress filings & fund 13Fs… (~1 min first time)"):
+                    cong = cached_congress_activity()
+                    funds = cached_fund_activity()
+                hits = 0
+                for tk in pos["Ticker"]:
+                    c = cong.get(tk)
+                    f = funds.get(tk)
+                    if not c and not f:
+                        continue
+                    hits += 1
+                    bits = []
+                    if c:
+                        if c["buys"]:
+                            bits.append(f"🏛️ **{c['buys']}** Congress buy(s)")
+                        if c["sells"]:
+                            bits.append(f"🏛️ **{c['sells']}** Congress sell(s)")
+                        bits.append("— " + ", ".join(c["actors"][:3]))
+                    if f:
+                        bits.append(f"🏦 held by **{', '.join(f)}**")
+                    st.markdown(f"**{tk}**: " + " · ".join(bits))
+                if not hits:
+                    st.info("None of your holdings show up in recent Congress trades or the tracked funds' 13Fs. "
+                            "(Your names are small-caps that big funds rarely hold and Congress hasn't traded recently.)")
+
 # ---- Single-stock deep dive ----------------------------------------------- #
 with tab_stock:
     st.header("Deep-dive analysis")
@@ -485,17 +523,25 @@ with tab_screen:
     )
 
     GAINERS_OPT = "🔥 Today's top gainers (live)"
+    CONGRESS_OPT = "🏛️ What Congress recently bought"
+    FUNDS_OPT = "🏦 What big investors hold"
     category = st.selectbox(
         "Pick a universe to scan (no tickers needed):",
-        [GAINERS_OPT] + list(analysis.SCREENER_UNIVERSES.keys()),
+        [GAINERS_OPT, CONGRESS_OPT, FUNDS_OPT] + list(analysis.SCREENER_UNIVERSES.keys()),
     )
     if category == GAINERS_OPT:
         st.caption("Pulls the market's biggest movers today (Alpha Vantage). ⚠️ Day-gainers are often "
                    "thin, speculative small-caps — treat with extra caution.")
+    elif category == CONGRESS_OPT:
+        st.caption("Analyzes the stocks members of Congress have **bought** in their recent disclosures.")
+    elif category == FUNDS_OPT:
+        st.caption("Analyzes the most widely-held stocks across the tracked famous funds' latest 13Fs.")
+    smart_on = st.checkbox("Factor in Congress & big-investor activity (adds ~1 min on first run)", value=True)
     with st.expander("⚙️ Or scan your own custom list instead"):
         custom = st.text_area("Tickers (comma-separated) — overrides the universe above", value="", height=70)
 
     if st.button("🔎 Find opportunities", type="primary"):
+        cong = funds_map = {}
         if custom.strip():
             tickers = tuple(t.strip().upper() for t in custom.replace("\n", ",").split(",") if t.strip())
             label = "your custom list"
@@ -506,26 +552,47 @@ with tab_screen:
             if not tickers:
                 st.warning("Couldn't fetch top gainers right now (the free Alpha Vantage tier may be rate-limited). "
                            "Add your own free key in Settings → Secrets as ALPHAVANTAGE_KEY for reliable access.")
+        elif category == CONGRESS_OPT:
+            with st.spinner("Reading recent Congress filings…"):
+                cong = cached_congress_activity()
+            tickers = tuple(tk for tk, a in sorted(cong.items(), key=lambda kv: -kv[1]["buys"]) if a["buys"] > 0)[:25]
+            label = "Congress's recent buys"
+        elif category == FUNDS_OPT:
+            with st.spinner("Reading famous funds' 13F filings…"):
+                funds_map = cached_fund_activity()
+            tickers = tuple(tk for tk, fs in sorted(funds_map.items(), key=lambda kv: -len(kv[1])))[:25]
+            label = "big-investor holdings"
         else:
             tickers = tuple(analysis.SCREENER_UNIVERSES[category])
             label = category
+
         with st.spinner(f"Scanning {len(tickers)} stocks in {label}… first run pulls live data (~1-2 min)."):
             res = cached_screen(tickers)
         if res.empty:
             st.warning("No results — try again in a moment (the free data API may be rate-limited).")
         else:
-            st.success(f"Top opportunities in {label} — ranked by opportunity score.")
+            # Layer in smart-money signal: a flag column + an opportunity-score nudge.
+            if smart_on:
+                with st.spinner("Adding Congress & big-investor signals…"):
+                    cong = cong or cached_congress_activity()
+                    funds_map = funds_map or cached_fund_activity()
+                res["Smart $"] = res["Ticker"].map(lambda tk: smartmoney.flag(tk, cong, funds_map))
+                res["Opportunity"] = (
+                    res["Opportunity"] + res["Ticker"].map(lambda tk: smartmoney.score_bonus(tk, cong, funds_map))
+                ).clip(0, 100).round(1)
+                res = res.sort_values("Opportunity", ascending=False).reset_index(drop=True)
+
+            st.success(f"Top opportunities in {label} — ranked by opportunity score"
+                       + (" (incl. smart-money)." if smart_on else "."))
             best = res.iloc[0]
             st.markdown(
                 f"🏆 **Top pick: {best['Ticker']}** ({best['Name']}) — opportunity {best['Opportunity']:.0f}/100, "
                 f"{best['Verdict']}. *{best['Top reason']}*"
             )
+            fmt = {"Price": "${:,.2f}", "Opportunity": "{:.0f}", "Composite": "{:.0f}",
+                   "Mkt cap": fmt_big_money, "P/E": "{:,.1f}", "Rev gr %": "{:+.0f}%"}
             st.dataframe(
-                res.style.format(
-                    {"Price": "${:,.2f}", "Opportunity": "{:.0f}", "Composite": "{:.0f}",
-                     "Mkt cap": fmt_big_money, "P/E": "{:,.1f}", "Rev gr %": "{:+.0f}%"},
-                    na_rep="—",
-                ).map(opportunity_bg, subset=["Opportunity"]),
+                res.style.format(fmt, na_rep="—").map(opportunity_bg, subset=["Opportunity"]),
                 use_container_width=True,
                 hide_index=True,
             )
