@@ -81,7 +81,13 @@ def get_info(ticker: str) -> dict[str, Any]:
 
 def _yf_info(ticker: str) -> dict[str, Any]:
     try:
-        return yf.Ticker(ticker).info or {}
+        info = yf.Ticker(ticker).info or {}
+        # yfinance returns dividendYield as a percentage (e.g. 0.48 = 0.48%);
+        # normalize to a fraction so it matches the Finnhub path and fmt_pct().
+        dy = info.get("dividendYield")
+        if dy is not None and dy > 0:
+            info["dividendYield"] = dy / 100
+        return info
     except Exception:
         return {}
 
@@ -133,9 +139,23 @@ def _finnhub_info(ticker: str, key: str) -> dict[str, Any]:
         "returnOnEquity": _frac(metric.get("roeTTM")),
         "debtToEquity": de,
         "currentRatio": _num(metric.get("currentRatioAnnual")) or _num(metric.get("currentRatioQuarterly")),
+        "quickRatio": _num(metric.get("quickRatioAnnual")),
         "freeCashflow": _num(metric.get("freeCashFlowTTM")),
         "fiftyTwoWeekHigh": _num(metric.get("52WeekHigh")),
         "fiftyTwoWeekLow": _num(metric.get("52WeekLow")),
+        # Additional fundamentals/market stats surfaced in the Key Statistics panel.
+        "marketCap": (_num(profile.get("marketCapitalization")) or 0) * 1e6 or None,  # profile is in $M
+        "beta": _num(metric.get("beta")),
+        "dividendYield": _frac(metric.get("currentDividendYieldTTM")) or _frac(metric.get("dividendYieldIndicatedAnnual")),
+        "grossMargins": _frac(metric.get("grossMarginTTM")),
+        "operatingMargins": _frac(metric.get("operatingMarginTTM")),
+        "returnOnAssets": _frac(metric.get("roaTTM")),
+        "trailingEps": _num(metric.get("epsTTM")),
+        "averageVolume": _num(metric.get("10DayAverageTradingVolume")),
+        "_ret5d": _num(metric.get("5DayPriceReturnDaily")),
+        "_ret13w": _num(metric.get("13WeekPriceReturnDaily")),
+        "_retytd": _num(metric.get("yearToDatePriceReturnDaily")),
+        "_ret52w": _num(metric.get("52WeekPriceReturnDaily")),
         # Dollar price targets are premium-gated on Finnhub's free tier; left None
         # on cloud (yfinance fills it locally). Analyst view comes from
         # get_analyst_consensus() instead, which uses a free Finnhub endpoint.

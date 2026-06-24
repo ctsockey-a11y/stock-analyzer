@@ -74,6 +74,27 @@ def score_color(score: float) -> str:
     return "#ea3943"
 
 
+def fmt_num(v) -> str:
+    return f"{v:,.2f}" if v is not None and not pd.isna(v) else "—"
+
+
+def fmt_pct(v) -> str:
+    return f"{v * 100:.1f}%" if v is not None and not pd.isna(v) else "—"
+
+
+def fmt_int(v) -> str:
+    return f"{v:,.0f}" if v is not None and not pd.isna(v) else "—"
+
+
+def fmt_big_money(v) -> str:
+    if v is None or pd.isna(v):
+        return "—"
+    for unit, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
+        if abs(v) >= unit:
+            return f"${v / unit:.2f}{suffix}"
+    return f"${v:,.0f}"
+
+
 def opportunity_bg(v) -> str:
     """Red→yellow→green cell background for a 0-100 score.
 
@@ -345,6 +366,51 @@ with tab_stock:
                 else:
                     st.caption("No major red flags detected.")
 
+            # Key statistics — a fuller set of raw data points from Finnhub/yfinance.
+            with st.expander("📊 Key statistics", expanded=True):
+                info = a.info
+                stats = [
+                    ("Market cap", fmt_big_money(info.get("marketCap"))),
+                    ("P/E (TTM)", fmt_num(info.get("trailingPE"))),
+                    ("Forward P/E", fmt_num(info.get("forwardPE"))),
+                    ("PEG", fmt_num(info.get("pegRatio"))),
+                    ("P/S", fmt_num(info.get("priceToSalesTrailing12Months"))),
+                    ("P/B", fmt_num(info.get("priceToBook"))),
+                    ("EPS (TTM)", fmt_num(info.get("trailingEps"))),
+                    ("Dividend yield", fmt_pct(info.get("dividendYield"))),
+                    ("Beta", fmt_num(info.get("beta"))),
+                    ("Gross margin", fmt_pct(info.get("grossMargins"))),
+                    ("Operating margin", fmt_pct(info.get("operatingMargins"))),
+                    ("Net margin", fmt_pct(info.get("profitMargins"))),
+                    ("ROE", fmt_pct(info.get("returnOnEquity"))),
+                    ("ROA", fmt_pct(info.get("returnOnAssets"))),
+                    ("Revenue growth", fmt_pct(info.get("revenueGrowth"))),
+                    ("Earnings growth", fmt_pct(info.get("earningsGrowth"))),
+                    ("Debt / equity", fmt_num(info.get("debtToEquity"))),
+                    ("Current ratio", fmt_num(info.get("currentRatio"))),
+                    ("Quick ratio", fmt_num(info.get("quickRatio"))),
+                    ("Avg volume (10d)", fmt_int(info.get("averageVolume"))),
+                ]
+                cols = st.columns(4)
+                for i, (label, val) in enumerate(stats):
+                    cols[i % 4].markdown(
+                        f"<div style='font-size:0.75rem;color:#888'>{label}</div>"
+                        f"<div style='font-size:1.05rem;font-weight:600;margin-bottom:10px'>{val}</div>",
+                        unsafe_allow_html=True,
+                    )
+                st.markdown("**Price returns**")
+                rets = [("5-day", info.get("_ret5d")), ("13-week", info.get("_ret13w")),
+                        ("YTD", info.get("_retytd")), ("52-week", info.get("_ret52w"))]
+                rcols = st.columns(len(rets))
+                for col, (lbl, v) in zip(rcols, rets):
+                    color = "#16c784" if (v or 0) > 0 else ("#ea3943" if (v or 0) < 0 else "#888")
+                    disp = f"{v:+.1f}%" if v is not None else "—"
+                    col.markdown(
+                        f"<div style='font-size:0.75rem;color:#888'>{lbl}</div>"
+                        f"<div style='font-size:1.1rem;font-weight:700;color:{color}'>{disp}</div>",
+                        unsafe_allow_html=True,
+                    )
+
             # Price chart
             hist = cached_history(ticker, "1y")
             if not hist.empty:
@@ -423,8 +489,11 @@ with tab_screen:
                 f"{best['Verdict']}. *{best['Top reason']}*"
             )
             st.dataframe(
-                res.style.format({"Price": "${:,.2f}", "Opportunity": "{:.0f}", "Composite": "{:.0f}"}, na_rep="—")
-                .map(opportunity_bg, subset=["Opportunity"]),
+                res.style.format(
+                    {"Price": "${:,.2f}", "Opportunity": "{:.0f}", "Composite": "{:.0f}",
+                     "Mkt cap": fmt_big_money, "P/E": "{:,.1f}", "Rev gr %": "{:+.0f}%"},
+                    na_rep="—",
+                ).map(opportunity_bg, subset=["Opportunity"]),
                 use_container_width=True,
                 hide_index=True,
             )
