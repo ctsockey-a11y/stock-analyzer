@@ -231,6 +231,17 @@ st.sidebar.caption("Data auto-refreshes every 5 min; click to pull live now.")
 
 
 # --------------------------------------------------------------------------- #
+# Newsletter banner
+# --------------------------------------------------------------------------- #
+NEWSLETTER_URL = "https://followthefilings.substack.com"
+st.info(
+    f"🗂️ **New: [Follow the Filings]({NEWSLETTER_URL})** — the weekly letter built on this app's "
+    "data. What Congress and famous funds just disclosed, quant-checked by the same 5-pillar "
+    f"engine. **[Subscribe free →]({NEWSLETTER_URL})**"
+)
+st.sidebar.markdown(f"🗂️ **[Follow the Filings]({NEWSLETTER_URL})** — our weekly smart-money letter")
+
+# --------------------------------------------------------------------------- #
 # Main tabs
 # --------------------------------------------------------------------------- #
 tab_portfolio, tab_stock, tab_screen, tab_congress, tab_funds = st.tabs(
