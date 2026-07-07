@@ -300,6 +300,87 @@ def tldr(agg: dict, scored: list, fund_map: dict[str, list[str]]) -> str:
     return "\n".join(lines) if lines else "- A quiet week in the disclosures."
 
 
+def takeaways(trades: list[dict], agg: dict, scored: list, fund_map: dict[str, list[str]]) -> str:
+    """Data-derived summary + forward-looking watch list. Rules, not vibes."""
+    out = ["## 🔮 The read-through\n",
+           "*What this batch of filings actually says, and what we're watching next. "
+           "Signals to research — not predictions, and not advice.*\n"]
+
+    # -- What happened ------------------------------------------------------
+    happened = []
+    buys = sum(a["buys"] for a in agg.values())
+    sells = sum(a["sells"] for a in agg.values())
+    bhi = sum(a["buy_hi"] for a in agg.values())
+    shi = sum(a["sell_hi"] for a in agg.values())
+    if buys or sells:
+        if bhi > shi * 1.3:
+            lean = f"a net **buyer** (~{_fmt_money(bhi)} of buys vs ~{_fmt_money(shi)} of sells)"
+        elif shi > bhi * 1.3:
+            lean = f"a net **seller** (~{_fmt_money(shi)} of sells vs ~{_fmt_money(bhi)} of buys)"
+        else:
+            lean = f"roughly **balanced** ({buys} buys, {sells} sells)"
+        happened.append(f"Congress was {lean} this window.")
+
+    from collections import Counter
+    members = Counter(t["member"] for t in trades)
+    if members:
+        top_member, top_n = members.most_common(1)[0]
+        if len(trades) >= 10 and top_n / len(trades) > 0.4:
+            happened.append(f"Honesty check: **{top_member}** accounts for {top_n} of the "
+                            f"{len(trades)} trades — much of this window is one active "
+                            "portfolio being rebalanced, so don't over-read the totals.")
+
+    if scored:
+        avg = sum(a.composite for a in scored) / len(scored)
+        by_tk = {a.ticker: a for a in scored}
+        fav = _ranked(agg, "buys", 1)
+        fav_a = by_tk.get(fav[0][0]) if fav else None
+        if fav_a and fav_a.composite < 50:
+            happened.append(f"The crowd-favorite buy (**{fav_a.ticker}**) fails our quant "
+                            f"check at {fav_a.composite:.0f}/100 — when the popular trade and the "
+                            "fundamentals disagree, we side with the fundamentals.")
+        elif avg >= 60:
+            happened.append(f"Unusually disciplined batch: the buys average "
+                            f"**{avg:.0f}/100** on the engine — Congress's picks and the "
+                            "fundamentals mostly agree this time.")
+        exp = [a for a in scored if any("Rich P/E" in f or "Very high P/S" in f for f in a.all_flags)]
+        if len(exp) >= max(2, len(scored) // 2):
+            happened.append(f"A theme across the buys: **paying up for growth** — "
+                            f"{len(exp)} of {len(scored)} scored names carry rich-valuation flags. "
+                            "That works while growth delivers and hurts fast when it doesn't.")
+    if happened:
+        out.append("**What happened**\n")
+        out += [f"- {h}" for h in happened]
+        out.append("")
+
+    # -- What we're watching -------------------------------------------------
+    watch = []
+    for a in sorted(scored, key=lambda x: -x.composite):
+        confirms = []
+        if a.ticker in fund_map:
+            confirms.append(f"held by {', '.join(fund_map[a.ticker][:2])}")
+        buyers = agg.get(a.ticker, {}).get("buyers", set())
+        if len(buyers) > 1:
+            confirms.append(f"{len(buyers)} separate members bought")
+        if a.composite >= 60 or confirms:
+            why = f"scores {a.composite:.0f}/100"
+            if confirms:
+                why += "; " + " and ".join(confirms)
+            risk = a.all_flags[0] if a.all_flags else None
+            watch.append(f"- **{a.ticker}** — {why}." + (f" The thing to watch: {risk.lower()}." if risk else ""))
+        if len(watch) >= 3:
+            break
+    if watch:
+        out.append("**What we're watching into next issue**\n")
+        out += watch
+        out.append("\nThe most durable pattern in this data isn't any single trade — it's "
+                   "**confluence**. When a disclosure, a big fund's book, and the fundamentals "
+                   "all point the same way, that's the shortlist. When they disagree, that's "
+                   "the warning.")
+        out.append("")
+    return "\n".join(out)
+
+
 FOOTER = f"""## The fine print
 
 Congressional trades come from the official House Clerk and Senate eFD disclosure
@@ -339,6 +420,7 @@ def build_issue(days: int, house_reports: int, senate_reports: int, top: int) ->
         quant_md,
         funds_md,
         overlap_section(agg, fund_map),
+        takeaways(trades, agg, scored, fund_map),
         FOOTER,
     ]
     return "\n".join(parts)
