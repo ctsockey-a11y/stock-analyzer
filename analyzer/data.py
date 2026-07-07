@@ -663,7 +663,8 @@ def get_senate_trades(max_reports: int = 20, ticker: str | None = None) -> list[
                 rows.append({"member": member, "filed": filed, "ticker": tk,
                              "type": _normalize_txn(str(tr.get("Type", ""))),
                              "amount": str(tr.get("Amount", "")).strip(),
-                             "date": str(tr.get("Transaction Date", "")).strip()})
+                             "date": str(tr.get("Transaction Date", "")).strip(),
+                             "doc_url": _SENATE + href.group(1)})
     except Exception:
         pass
     if ticker:
@@ -721,7 +722,8 @@ def get_13f_holdings(cik: str, top: int = 15) -> dict[str, Any]:
         holdings = [{"issuer": n, "value": v, "pct": v / total * 100, "shares": shares.get(n, 0)}
                     for n, v in value.items()]
         holdings.sort(key=lambda x: -x["value"])
-        return {"filed": filed, "holdings": holdings[:top], "total": total, "positions": len(value)}
+        return {"filed": filed, "holdings": holdings[:top], "total": total,
+                "positions": len(value), "url": folder}
     except Exception:
         return {"filed": None, "holdings": []}
 

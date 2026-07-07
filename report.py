@@ -5,7 +5,9 @@ Builds a ready-to-paste markdown issue from the same pipelines the app uses:
   * Famous-fund 13F holdings (SEC EDGAR)
   * The 5-pillar rule-based scoring engine (the "quant check")
 
-Run it locally (yfinance works here; no API key needed):
+Run it locally (yfinance works here; no key needed for the data sources — the
+optional "Our take" editorial uses the Claude API via ANTHROPIC_API_KEY and is
+skipped gracefully when the key or the `anthropic` package is absent):
 
     source venv/bin/activate
     python report.py                 # last 10 days of filings, top 6 quant checks
@@ -188,7 +190,10 @@ def congress_section(trades: list[dict], agg: dict, oldest: dt.date | None, days
         for t in notable:
             side = "bought" if "Buy" in t["type"] else ("sold" if "Sell" in t["type"] else "exchanged")
             who = f"{'Rep.' if t['chamber'] == 'House' else 'Sen.'} {t['member']}"
-            out.append(f"- {who} {side} **{t['ticker']}** — {_fmt_range(t.get('amount', ''))} on {_fmt_day(t.get('date', ''))}")
+            when = f"{_fmt_range(t.get('amount', ''))} on {_fmt_day(t.get('date', ''))}"
+            if t.get("doc_url"):  # link the claim to the official filing itself
+                when += f" ([filing]({t['doc_url']}))"
+            out.append(f"- {who} {side} **{t['ticker']}** — {when}")
         out.append("")
     if not bought and not sold:
         out.append("*A quiet week — no parseable stock trades in the latest filings.*\n")
@@ -199,9 +204,9 @@ def quant_section(agg: dict, top: int) -> tuple[str, list]:
     """Score the most-bought tickers with the 5-pillar engine."""
     picks = [tk for tk, _ in _ranked(agg, "buys", top)]
     out = ["## 🔬 Quant check: do the fundamentals agree?\n",
-           "*Congress bought these — here's what our rule-based 5-pillar scoring engine "
-           "(valuation, growth, profitability, financial health, smart-money & momentum) says. "
-           "0–100; no AI, no vibes, every point traceable to a rule.*\n"]
+           "*Congress bought these — here's what our 5-pillar scoring engine (valuation, "
+           "growth, profitability, financial health, smart-money & momentum) says. 0–100, and "
+           "every score breaks down into the specific reasons behind it.*\n"]
     scored = []
     for tk in picks:
         try:
@@ -234,7 +239,8 @@ def funds_section() -> tuple[str, dict[str, list[str]]]:
             continue
         tops = " · ".join(f"{x['issuer']} {x['pct']:.0f}%" for x in h["holdings"])
         filed = _parse_date(h["filed"]) if h.get("filed") else None
-        when = f" (filed {filed:%b %-d})" if filed else ""
+        when = f"filed {filed:%b %-d}" if filed else "latest 13F"
+        when = f" ([{when}]({h['url']}))" if h.get("url") else f" ({when})"
         out.append(f"**{fund}**{when}")
         out.append(f"- {tops}\n")
     return "\n".join(out), fund_map
@@ -381,11 +387,75 @@ def takeaways(trades: list[dict], agg: dict, scored: list, fund_map: dict[str, l
     return "\n".join(out)
 
 
+def our_take(trades: list[dict], agg: dict, scored: list, fund_map: dict[str, list[str]]) -> str:
+    """Editorial commentary on the week's data. Returns '' if unavailable.
+
+    Grounded strictly in this issue's numbers via the prompt; general knowledge about
+    what a company does is allowed, but claims about news/prices/events are not, and
+    neither are predictions or advice. Requires ANTHROPIC_API_KEY (local only).
+    """
+    import os
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return ""
+    facts = ["Congress trades this window (buys/sells per ticker, disclosed ranges are upper bounds):"]
+    for tk, a in sorted(agg.items(), key=lambda x: -(x[1]["buys"] + x[1]["sells"]))[:20]:
+        facts.append(f"- {tk}: {a['buys']} buys (~{_fmt_money(a['buy_hi'])}) by {sorted(a['buyers'])}, "
+                     f"{a['sells']} sells (~{_fmt_money(a['sell_hi'])}) by {sorted(a['sellers'])}")
+    facts.append("\nQuant scores (0-100) for the most-bought names:")
+    for a in scored:
+        facts.append(f"- {a.ticker} ({a.name}, {a.sector}): {a.composite:.0f}/100 ({a.verdict}). "
+                     f"Strengths: {'; '.join(a.all_reasons[:3]) or 'none'}. "
+                     f"Risks: {'; '.join(a.all_flags[:3]) or 'none'}.")
+    facts.append("\nTickers Congress bought that famous funds also hold (latest 13F):")
+    for tk, funds in fund_map.items():
+        if agg.get(tk, {}).get("buys"):
+            facts.append(f"- {tk}: held by {funds}")
+
+    prompt = (
+        "You write the closing column of Follow the Filings, a newsletter that reads US "
+        "congressional stock-trade disclosures and famous funds' 13F filings, then scores the "
+        "names with a fundamentals engine. Below is this issue's data. Write a section titled "
+        "nothing (no heading) of 2-3 short paragraphs: a sharp, plain-English editorial on what "
+        "this window of disclosures does and doesn't tell us.\n\n"
+        "Hard rules:\n"
+        "- Use ONLY the data below plus general public knowledge of what a company does. "
+        "No claims about recent news, prices, or events.\n"
+        "- No predictions of price moves, no buy/sell recommendations, no 'we expect'. "
+        "Frame forward-looking thoughts as questions or things to watch.\n"
+        "- Voice: first-person plural ('we'), measured, a little wry, zero hype. "
+        "Short sentences. No bullet lists, no headings, no sign-off.\n"
+        "- If the window is dominated by one trader's activity, say plainly that it limits "
+        "what can be read into the totals.\n\n"
+        "DATA:\n" + "\n".join(facts)
+    )
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic()
+        resp = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=2000,
+            thinking={"type": "adaptive"},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = "".join(b.text for b in resp.content if b.type == "text").strip()
+    except Exception as e:
+        print(f"  ⚠️ 'Our take' skipped ({type(e).__name__}: {e})")
+        return ""
+    if not text:
+        return ""
+    return "## 💭 Our take\n\n" + text + "\n"
+
+
 FOOTER = f"""## The fine print
 
-Congressional trades come from the official House Clerk and Senate eFD disclosure
-systems; fund holdings from SEC EDGAR 13F filings. **Disclosures lag reality by
-30–45 days** — treat everything here as positioning information, not trade signals.
+Congressional trades come from the official [House Clerk](https://disclosures-clerk.house.gov/FinancialDisclosure)
+and [Senate eFD](https://efdsearch.senate.gov/search/) disclosure systems; fund
+holdings from [SEC EDGAR](https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=13F-HR) 13F
+filings — the filing links throughout each issue go straight to the source documents.
+**Disclosures lag reality by 30–45 days** — treat everything here as positioning
+information, not trade signals.
 Amounts are disclosed as ranges; we show upper bounds. Nothing in this letter is
 investment advice; do your own research.
 
@@ -406,6 +476,8 @@ def build_issue(days: int, house_reports: int, senate_reports: int, top: int) ->
     quant_md, scored = quant_section(agg, top)
     print("  Pulling 13F holdings…")
     funds_md, fund_map = funds_section()
+    print("  Writing the editorial…")
+    take_md = our_take(trades, agg, scored, fund_map)
 
     parts = [
         f"# 🗂️ Follow the Filings — {today:%B %-d, %Y}\n",
@@ -421,9 +493,10 @@ def build_issue(days: int, house_reports: int, senate_reports: int, top: int) ->
         funds_md,
         overlap_section(agg, fund_map),
         takeaways(trades, agg, scored, fund_map),
+        take_md,
         FOOTER,
     ]
-    return "\n".join(parts)
+    return "\n".join(p for p in parts if p)
 
 
 def main() -> None:
