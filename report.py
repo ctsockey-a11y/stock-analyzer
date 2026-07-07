@@ -6,8 +6,9 @@ Builds a ready-to-paste markdown issue from the same pipelines the app uses:
   * The 5-pillar rule-based scoring engine (the "quant check")
 
 Run it locally (yfinance works here; no key needed for the data sources — the
-optional "Our take" editorial uses the Claude API via ANTHROPIC_API_KEY and is
-skipped gracefully when the key or the `anthropic` package is absent):
+"Our take" editorial runs through the Claude Code CLI on the existing Claude
+plan, falling back to the Claude API only if a funded ANTHROPIC_API_KEY exists,
+and is skipped gracefully when neither is available):
 
     source venv/bin/activate
     python report.py                 # last 10 days of filings, top 6 quant checks
@@ -387,17 +388,58 @@ def takeaways(trades: list[dict], agg: dict, scored: list, fund_map: dict[str, l
     return "\n".join(out)
 
 
+def _claude_cli(prompt: str) -> str:
+    """Run a prompt through the Claude Code CLI (billed to the Claude Code plan).
+
+    ANTHROPIC_API_KEY is stripped from the subprocess env — if set, it shadows the
+    claude.ai login and the CLI tries (and may fail) to bill the API key instead.
+    """
+    import os
+    import shutil
+    import subprocess
+
+    exe = shutil.which("claude")
+    if not exe:
+        return ""
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    try:
+        r = subprocess.run([exe, "-p"], input=prompt, capture_output=True,
+                           text=True, timeout=600, env=env)
+    except Exception:
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def _claude_api(prompt: str) -> str:
+    """Fallback: the Claude API directly (needs ANTHROPIC_API_KEY with credits)."""
+    import os
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return ""
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic()
+        resp = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=2000,
+            thinking={"type": "adaptive"},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return "".join(b.text for b in resp.content if b.type == "text").strip()
+    except Exception as e:
+        print(f"  ⚠️ Claude API fallback failed ({type(e).__name__})")
+        return ""
+
+
 def our_take(trades: list[dict], agg: dict, scored: list, fund_map: dict[str, list[str]]) -> str:
     """Editorial commentary on the week's data. Returns '' if unavailable.
 
     Grounded strictly in this issue's numbers via the prompt; general knowledge about
     what a company does is allowed, but claims about news/prices/events are not, and
-    neither are predictions or advice. Requires ANTHROPIC_API_KEY (local only).
+    neither are predictions or advice. Uses the Claude Code CLI (plan-billed) first,
+    then the Claude API if a funded ANTHROPIC_API_KEY exists.
     """
-    import os
-
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return ""
     facts = ["Congress trades this window (buys/sells per ticker, disclosed ranges are upper bounds):"]
     for tk, a in sorted(agg.items(), key=lambda x: -(x[1]["buys"] + x[1]["sells"]))[:20]:
         facts.append(f"- {tk}: {a['buys']} buys (~{_fmt_money(a['buy_hi'])}) by {sorted(a['buyers'])}, "
@@ -429,21 +471,9 @@ def our_take(trades: list[dict], agg: dict, scored: list, fund_map: dict[str, li
         "what can be read into the totals.\n\n"
         "DATA:\n" + "\n".join(facts)
     )
-    try:
-        import anthropic
-
-        client = anthropic.Anthropic()
-        resp = client.messages.create(
-            model="claude-opus-4-8",
-            max_tokens=2000,
-            thinking={"type": "adaptive"},
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = "".join(b.text for b in resp.content if b.type == "text").strip()
-    except Exception as e:
-        print(f"  ⚠️ 'Our take' skipped ({type(e).__name__}: {e})")
-        return ""
+    text = _claude_cli(prompt) or _claude_api(prompt)
     if not text:
+        print("  ⚠️ 'Our take' skipped (no Claude Code CLI and no funded API key)")
         return ""
     return "## 💭 Our take\n\n" + text + "\n"
 
