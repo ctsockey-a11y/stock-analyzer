@@ -58,6 +58,38 @@ def _fmt_money(n: int) -> str:
     return f"${n}"
 
 
+def _fmt_range(amount: str) -> str:
+    """'$50,001 - $100,000' -> '$50K–$100K' (falls back to the raw string)."""
+    nums = re.findall(r"\$([\d,]+)", amount or "")
+    if len(nums) == 2:
+        try:
+            lo, hi = (int(x.replace(",", "")) for x in nums)
+            return f"{_fmt_money(lo)}–{_fmt_money(hi)}"
+        except ValueError:
+            pass
+    return amount or "?"
+
+
+def _fmt_day(s: str) -> str:
+    """'06/10/2026' -> 'Jun 10' (falls back to the raw string)."""
+    d = _parse_date(s)
+    return f"{d:%b %-d}" if d else (s or "?")
+
+
+_VERDICT_DOT = {"Strong": "🟢", "Good": "🟢", "Mixed": "🟡", "Weak": "🔴", "Avoid": "🔴"}
+
+
+def _bottom_line(a) -> str:
+    """One plain-English takeaway per quant-checked stock."""
+    if a.composite >= 75:
+        return "the numbers strongly back this buy."
+    if a.composite >= 60:
+        return "solid fundamentals — the buy looks reasonable."
+    if a.composite >= 45:
+        return "a coin flip — real strengths, real question marks."
+    return "the fundamentals don't support the enthusiasm."
+
+
 def gather_trades(days: int, house_reports: int, senate_reports: int) -> tuple[list[dict], dt.date | None]:
     """All House+Senate trades filed within the window, tagged with chamber."""
     cutoff = dt.date.today() - dt.timedelta(days=days)
@@ -117,23 +149,31 @@ def _ranked(agg: dict[str, dict], side: str, n: int = 8) -> list[tuple[str, dict
 # --------------------------------------------------------------------------- #
 # Render sections
 # --------------------------------------------------------------------------- #
+EXPLAINER = (
+    "> **New here?** US law makes this data public: the STOCK Act forces members of "
+    "Congress to disclose their trades (within 45 days, as dollar ranges), and big funds "
+    "must reveal their holdings quarterly in SEC 13F filings. We read the filings so you "
+    "don't have to — then run every name through a rule-based scoring engine to see "
+    "whether the fundamentals back the trade.\n"
+)
+
+
 def _trade_line(tk: str, a: dict, side: str) -> str:
     n = a[side]
     hi = a["buy_hi" if side == "buys" else "sell_hi"]
-    who = ", ".join(sorted(_actors(a, side)))
-    amt = f", up to ~{_fmt_money(hi)} combined" if hi else ""
+    who = " + ".join(sorted(_actors(a, side)))
+    amt = f" totaling up to ~{_fmt_money(hi)}" if hi else ""
     verb = side[:-1] if n == 1 else side
-    return f"- **{tk}** — {n} {verb}{amt} · {who}"
+    return f"- **{tk}** — {n} {verb}{amt} ({who})"
 
 
 def congress_section(trades: list[dict], agg: dict, oldest: dt.date | None, days: int) -> str:
-    window = f"filings disclosed since {oldest:%b %d}" if oldest else f"the last {days} days of filings"
+    window = f"since {oldest:%B %-d}" if oldest else f"in the last {days} days"
     nh = sum(1 for t in trades if t["chamber"] == "House")
     ns = len(trades) - nh
     out = [f"## 🏛️ What Congress traded\n",
-           f"*{len(trades)} trades ({nh} House · {ns} Senate) across {window}. "
-           f"Amounts are the disclosed ranges' upper bounds.*\n"]
-    bought, sold = _ranked(agg, "buys"), _ranked(agg, "sells")
+           f"*{len(trades)} trades disclosed {window} ({nh} House, {ns} Senate).*\n"]
+    bought, sold = _ranked(agg, "buys", 5), _ranked(agg, "sells", 5)
     if bought:
         out.append("**Most bought**\n")
         out += [_trade_line(tk, a, "buys") for tk, a in bought]
@@ -144,11 +184,11 @@ def congress_section(trades: list[dict], agg: dict, oldest: dt.date | None, days
         out.append("")
     notable = sorted(trades, key=lambda t: _amount_hi(t.get("amount", "")), reverse=True)[:5]
     if notable and _amount_hi(notable[0].get("amount", "")):
-        out.append("**Biggest single trades**\n")
+        out.append("**The biggest checks**\n")
         for t in notable:
             side = "bought" if "Buy" in t["type"] else ("sold" if "Sell" in t["type"] else "exchanged")
             who = f"{'Rep.' if t['chamber'] == 'House' else 'Sen.'} {t['member']}"
-            out.append(f"- {who} {side} **{t['ticker']}** ({t.get('amount', '?')}) on {t.get('date', '?')}")
+            out.append(f"- {who} {side} **{t['ticker']}** — {_fmt_range(t.get('amount', ''))} on {_fmt_day(t.get('date', ''))}")
         out.append("")
     if not bought and not sold:
         out.append("*A quiet week — no parseable stock trades in the latest filings.*\n")
@@ -170,12 +210,14 @@ def quant_section(agg: dict, top: int) -> tuple[str, list]:
             continue
         scored.append(a)
         price = f" · ${a.price:,.2f}" if a.price else ""
-        out.append(f"**{a.ticker} — {a.composite:.0f}/100 ({a.verdict})**{price} · {a.sector}")
+        dot = _VERDICT_DOT.get(a.verdict, "⚪")
+        out.append(f"### {dot} {a.ticker} — {a.composite:.0f}/100{price}")
+        out.append(f"*{a.name} · {a.sector}*\n")
         for r in a.all_reasons[:2]:
             out.append(f"- ✅ {r}")
         for f in a.all_flags[:2]:
             out.append(f"- ⚠️ {f}")
-        out.append("")
+        out.append(f"\n**Bottom line:** {_bottom_line(a)}\n")
     if not scored:
         out.append("*No scoreable buys this week.*\n")
     return "\n".join(out), scored
@@ -190,9 +232,10 @@ def funds_section() -> tuple[str, dict[str, list[str]]]:
         h = data.get_13f_holdings(cik, top=5)
         if not h.get("holdings"):
             continue
-        tops = ", ".join(f"{x['issuer']} ({x['pct']:.0f}%)" for x in h["holdings"])
-        filed = f" — filed {h['filed']}" if h.get("filed") else ""
-        out.append(f"**{fund}**{filed}")
+        tops = " · ".join(f"{x['issuer']} {x['pct']:.0f}%" for x in h["holdings"])
+        filed = _parse_date(h["filed"]) if h.get("filed") else None
+        when = f" (filed {filed:%b %-d})" if filed else ""
+        out.append(f"**{fund}**{when}")
         out.append(f"- {tops}\n")
     return "\n".join(out), fund_map
 
@@ -205,13 +248,34 @@ def overlap_section(agg: dict, fund_map: dict[str, list[str]]) -> str:
     hits.sort(key=lambda x: (len(x[2]), x[1]["buys"]), reverse=True)
     if hits:
         for tk, a, funds in hits:
-            n = a["buys"]
-            out.append(f"- **{tk}** — {n} Congress buy{'s' if n > 1 else ''} "
-                       f"({', '.join(sorted(a['buyers']))}) + held by {', '.join(funds)}")
+            who = " and ".join(sorted(a["buyers"]))
+            fl = ", ".join(funds[:-1]) + (" & " if len(funds) > 1 else "") + funds[-1]
+            out.append(f"- **{tk}** — {who} bought it; {fl} hold{'s' if len(funds) == 1 else ''} it")
     else:
         out.append("*No overlap this week — Congress and the big funds are shopping in different aisles.*")
     out.append("")
     return "\n".join(out)
+
+
+def lede(trades: list[dict], agg: dict, scored: list) -> str:
+    """A two-sentence narrative hook built from this issue's actual numbers."""
+    n = len(trades)
+    bits = [f"Congress disclosed **{n} stock trades** in the latest filings."]
+    by_tk = {a.ticker: a for a in scored}
+    bought = _ranked(agg, "buys", 1)
+    if bought:
+        tk, _ = bought[0]
+        a = by_tk.get(tk)
+        if a:
+            bits.append(f"Their favorite buy, **{tk}**, scores **{a.composite:.0f}/100** on our engine")
+            best = max(scored, key=lambda x: x.composite)
+            if best.ticker != tk and best.composite - a.composite >= 10:
+                bits[-1] += f" — while a quieter buy, **{best.ticker}**, is the real standout at **{best.composite:.0f}/100**."
+            else:
+                bits[-1] += "."
+    bits.append("Here's what they traded, what the numbers say, and where the politicians "
+                "and the billionaire funds agree.")
+    return " ".join(bits)
 
 
 def tldr(agg: dict, scored: list, fund_map: dict[str, list[str]]) -> str:
@@ -246,6 +310,8 @@ investment advice; do your own research.
 
 *Scores come from the free, open [Stock Analyzer]({APP_URL}) — run any ticker
 through the same 5-pillar engine yourself.*
+
+Questions about a ticker or a trade? Hit reply — I read everything.
 """
 
 
@@ -262,11 +328,12 @@ def build_issue(days: int, house_reports: int, senate_reports: int, top: int) ->
 
     parts = [
         f"# 🗂️ Follow the Filings — {today:%B %-d, %Y}\n",
-        "*What Congress and the world's most-watched investors just disclosed, "
-        "cross-checked against cold, rule-based fundamentals.*\n",
+        lede(trades, agg, scored),
+        "",
         "**TL;DR**\n",
         tldr(agg, scored, fund_map),
         "",
+        EXPLAINER,
         congress_section(trades, agg, oldest, days),
         PAYWALL,
         quant_md,
