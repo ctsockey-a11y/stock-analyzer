@@ -72,6 +72,23 @@ Use the sidebar to load a **sample portfolio**, **upload a CSV**
 (`ticker,shares,cost_basis`), or **type positions manually**. Nothing is stored
 on a server — your holdings live only in your browser session.
 
+## Smart Money Weekly (newsletter generator)
+
+`report.py` turns the smart-money pipelines into a ready-to-paste markdown
+newsletter issue: Congress trades (House + Senate), a 5-pillar quant check of
+what they bought, famous-fund 13F holdings, and the tickers where the two
+overlap. Run it locally:
+
+```bash
+source venv/bin/activate
+python report.py            # writes reports/YYYY-MM-DD-smart-money-weekly.md
+```
+
+Everything above the ✂️ marker is the free preview; below it is the paid issue.
+Generated issues in `reports/` are intentionally not committed (this repo is
+public). Uses only public-domain government data plus local yfinance — no API
+key required.
+
 [yfinance]: https://github.com/ranaroussi/yfinance
 [SEC EDGAR]: https://www.sec.gov/edgar
 [Finnhub]: https://finnhub.io/

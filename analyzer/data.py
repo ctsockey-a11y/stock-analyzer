@@ -649,7 +649,7 @@ def get_senate_trades(max_reports: int = 20, ticker: str | None = None) -> list[
             href = re.search(r'href="([^"]+)"', row[3])
             if not href or "/ptr/" not in href.group(1):  # skip scanned/paper filings
                 continue
-            member = f"{row[0]} {row[1]}".strip()
+            member = f"{row[0]} {row[1]}".strip().rstrip(",").strip()
             filed = row[4]
             try:
                 pg = s.get(_SENATE + href.group(1), headers={"Referer": f"{_SENATE}/search/"}, timeout=_HTTP_TIMEOUT)
@@ -711,7 +711,9 @@ def get_13f_holdings(cik: str, top: int = 15) -> dict[str, Any]:
             vl = re.search(r"<(?:\w+:)?value>(.*?)<", blk)
             sh = re.search(r"<(?:\w+:)?sshPrnamt>(.*?)<", blk)
             if nm and vl:
-                n = nm.group(1).strip().title()
+                import html as _html
+
+                n = _html.unescape(nm.group(1).strip()).title()
                 value[n] = value.get(n, 0) + int(vl.group(1))
                 if sh:
                     shares[n] = shares.get(n, 0) + int(sh.group(1))
