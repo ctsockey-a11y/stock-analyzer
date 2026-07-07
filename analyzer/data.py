@@ -27,7 +27,7 @@ import requests
 import yfinance as yf
 
 # SEC requires a descriptive User-Agent with contact info per their fair-access policy.
-SEC_HEADERS = {"User-Agent": "stock-analyzer (personal research; contact: ctsockey@gmail.com)"}
+SEC_HEADERS = {"User-Agent": "stock-analyzer / Follow the Filings (contact: followthefilings@gmail.com)"}
 _HTTP_TIMEOUT = 15
 _FINNHUB = "https://finnhub.io/api/v1"
 

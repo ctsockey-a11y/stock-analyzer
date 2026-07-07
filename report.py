@@ -1,4 +1,4 @@
-"""Smart Money Weekly — newsletter issue generator.
+"""Follow the Filings — newsletter issue generator.
 
 Builds a ready-to-paste markdown issue from the same pipelines the app uses:
   * US House + Senate stock trades (official Clerk / eFD disclosures)
@@ -11,7 +11,7 @@ Run it locally (yfinance works here; no API key needed):
     python report.py                 # last 10 days of filings, top 6 quant checks
     python report.py --days 14 --top 8
 
-Output lands in reports/YYYY-MM-DD-smart-money-weekly.md. Everything above the
+Output lands in reports/YYYY-MM-DD-follow-the-filings.md. Everything above the
 PAYWALL marker is the free preview; everything below is for paid subscribers.
 The format deliberately avoids markdown tables — Substack's editor won't render
 them on paste, so sections use bold lines and bullets instead.
@@ -261,8 +261,8 @@ def build_issue(days: int, house_reports: int, senate_reports: int, top: int) ->
     funds_md, fund_map = funds_section()
 
     parts = [
-        f"# 💰 Smart Money Weekly — {today:%B %-d, %Y}\n",
-        "*What Congress and the world's most-watched investors just traded, "
+        f"# 🗂️ Follow the Filings — {today:%B %-d, %Y}\n",
+        "*What Congress and the world's most-watched investors just disclosed, "
         "cross-checked against cold, rule-based fundamentals.*\n",
         "**TL;DR**\n",
         tldr(agg, scored, fund_map),
@@ -278,7 +278,7 @@ def build_issue(days: int, house_reports: int, senate_reports: int, top: int) ->
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Generate a Smart Money Weekly issue (markdown).")
+    ap = argparse.ArgumentParser(description="Generate a Follow the Filings issue (markdown).")
     ap.add_argument("--days", type=int, default=10, help="only include filings disclosed in the last N days")
     ap.add_argument("--house", type=int, default=40, help="House PTR filings to parse")
     ap.add_argument("--senate", type=int, default=25, help="Senate PTR filings to parse")
@@ -289,7 +289,7 @@ def main() -> None:
     md = build_issue(args.days, args.house, args.senate, args.top)
     outdir = Path(args.out)
     outdir.mkdir(exist_ok=True)
-    path = outdir / f"{dt.date.today():%Y-%m-%d}-smart-money-weekly.md"
+    path = outdir / f"{dt.date.today():%Y-%m-%d}-follow-the-filings.md"
     path.write_text(md)
     print(f"\n✅ Issue written to {path}")
     print("   Paste everything ABOVE the ✂️ marker as the free preview;")

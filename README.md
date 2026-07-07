@@ -72,7 +72,7 @@ Use the sidebar to load a **sample portfolio**, **upload a CSV**
 (`ticker,shares,cost_basis`), or **type positions manually**. Nothing is stored
 on a server — your holdings live only in your browser session.
 
-## Smart Money Weekly (newsletter generator)
+## Follow the Filings (newsletter generator)
 
 `report.py` turns the smart-money pipelines into a ready-to-paste markdown
 newsletter issue: Congress trades (House + Senate), a 5-pillar quant check of
@@ -81,7 +81,7 @@ overlap. Run it locally:
 
 ```bash
 source venv/bin/activate
-python report.py            # writes reports/YYYY-MM-DD-smart-money-weekly.md
+python report.py            # writes reports/YYYY-MM-DD-follow-the-filings.md
 ```
 
 Everything above the ✂️ marker is the free preview; below it is the paid issue.
