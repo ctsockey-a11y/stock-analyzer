@@ -523,10 +523,12 @@ def build_issue(days: int, house_reports: int, senate_reports: int, top: int) ->
         funds_md,
         overlap_section(agg, fund_map),
         takeaways(trades, agg, scored, fund_map),
-        take_md,
-        FOOTER,
     ]
-    return "\n".join(p for p in parts if p)
+    if take_md:  # skipped when no Claude CLI/API is available
+        parts.append(take_md)
+    parts.append(FOOTER)
+    # "" entries are deliberate blank-line spacers — never filter them out.
+    return "\n".join(parts)
 
 
 def main() -> None:
